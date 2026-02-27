@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Grok Video Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="dot"></div>
+      <div>
+        <div class="title">Grok Imagine Video</div>
+        <div class="subtitle">Flask SPA • text → video • image → video</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <a href="/app" data-link>Generate</a>
+      <a href="/app/jobs" data-link>Jobs</a>
+      <a href="/app/about" data-link>About</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div id="view"></div>
+  </main>
+
+
+
+  <template id="tpl-generate">
+    <section class="card">
+      <div class="generateHeader">
+        <h2>Generate</h2>
+        <button id="btn-history" class="btn ghost">History</button>
+      </div>
+
+      <div class="layoutSplit">
+        <div class="panel">
+          <label class="label">Prompt</label>
+          <textarea id="prompt" class="textarea" placeholder="Describe the video..."></textarea>
+
+          <div class="grid">
+            <div>
+              <label class="label">Duration (1–15s)</label>
+              <input id="duration" class="input" type="number" min="1" max="15" value="8" />
+            </div>
+
+            <div>
+              <label class="label">Aspect ratio</label>
+              <select id="aspect_ratio" class="select">
+                <option value="16:9" selected>16:9</option>
+                <option value="9:16">9:16</option>
+                <option value="1:1">1:1</option>
+                <option value="4:3">4:3</option>
+                <option value="3:4">3:4</option>
+                <option value="3:2">3:2</option>
+                <option value="2:3">2:3</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="label">Resolution</label>
+              <select id="resolution" class="select">
+                <option value="480p" selected>480p</option>
+                <option value="720p">720p</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="label">Optional image (image → video)</label>
+              <input id="image" class="input" type="file" accept="image/*" />
+            </div>
+          </div>
+
+          <div class="row">
+            <button id="btn-generate" class="btn">Generate</button>
+            <button id="btn-clear" class="btn ghost">Clear</button>
+            <div id="hint" class="hint"></div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="frameBox">
+            <div class="frameHeader">
+              <div class="label">Frame</div>
+              <div class="frameActions">
+                <button id="btn-capture-frame" class="btn tiny ghost">Capture from player</button>
+                <button id="btn-clear-frame" class="btn tiny ghost">Clear frame</button>
+              </div>
+            </div>
+            <div class="muted small">Captured frame is used as the image input if no file is chosen above.</div>
+            <div class="framePreviewRow">
+              <img id="framePreview" class="framePreview" alt="Captured frame preview" />
+              <div id="frameMeta" class="frameMeta muted small"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div>
+            <div class="statusHeader">
+              <div class="label">Status</div>
+              <div class="statusRight">
+                <button id="btn-close-history" class="btn tiny ghost">Close history</button>
+              </div>
+            </div>
+            <pre id="status" class="pre">Idle.</pre>
+
+            <div id="result" class="result"></div>
+
+            <div id="playerWrap" class="playerWrap" style="display:none;">
+              <video id="player" controls playsinline preload="metadata" class="player"></video>
+              <div class="muted small" style="margin-top:8px;">
+                If playback fails, open the video URL (it may block cross-origin playback or expire).
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="drawerOverlay" class="drawerOverlay" aria-hidden="true"></div>
+
+      <aside id="drawer" class="drawer" aria-hidden="true">
+        <div class="drawerTop">
+          <div>
+            <div class="drawerTitle">History</div>
+            <div class="drawerSubtitle muted small">Click a job to preview it on the right.</div>
+          </div>
+          <button id="btn-drawer-close" class="btn tiny ghost">Close</button>
+        </div>
+
+        <div class="drawerBody">
+          <div class="drawerControls">
+            <button id="btn-refresh-jobs" class="btn tiny ghost">Refresh statuses</button>
+            <button id="btn-clear-jobs" class="btn tiny ghost">Clear history</button>
+          </div>
+          <div id="jobsList" class="jobsList"></div>
+        </div>
+      </aside>
+    </section>
+  </template>
+
+
+  
+
+  <template id="tpl-jobs">
+    <section class="card">
+      <h2>Jobs</h2>
+      <div class="muted">Recent requests stored in this browser.</div>
+      <div class="divider"></div>
+      <div id="jobs-list"></div>
+    </section>
+  </template>
+
+  <template id="tpl-about">
+    <section class="card">
+      <h2>About</h2>
+      <p class="muted">
+        Single-page app with History API routing. Flask serves the SPA shell and exposes:
+        <span class="code">POST /api/start</span>, <span class="code">GET /api/status/&lt;id&gt;</span>.
+      </p>
+      <div class="divider"></div>
+      <p class="muted">
+        Note: generated video URLs are temporary — download promptly.
+      </p>
+    </section>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
