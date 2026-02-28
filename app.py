@@ -7,13 +7,20 @@ import uuid
 import tempfile
 import subprocess
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from flask import Flask, request, jsonify, render_template, Response, send_from_directory
 import requests
 import xai_sdk
 from xai_sdk.proto import deferred_pb2
 
+
+from dotenv import load_dotenv
+load_dotenv()
+
+XAI_API_KEY = os.getenv("XAI_API_KEY")
+if not XAI_API_KEY:
+    raise RuntimeError("Missing XAI_API_KEY environment variable.")
 
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -25,19 +32,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("grok-ui")
 
+
+
 from werkzeug.exceptions import HTTPException
-
-@app.errorhandler(Exception)
-def handle_any_exception(e):
-    if isinstance(e, HTTPException):
-        return e
-
-    req_id = getattr(request, "req_id", "n/a")
-    log.error("Unhandled exception req_id=%s\n%s", req_id, traceback.format_exc())
-    return jsonify(
-        error=str(e),
-        req_id=req_id,
-    ), 500
 
 @app.before_request
 def attach_request_id():
@@ -50,9 +47,15 @@ def add_request_id_header(resp):
 
 @app.errorhandler(Exception)
 def handle_any_exception(e):
+    if isinstance(e, HTTPException):
+        return e
+
     req_id = getattr(request, "req_id", "n/a")
     log.error("Unhandled exception req_id=%s\n%s", req_id, traceback.format_exc())
     return jsonify(error=str(e), req_id=req_id), 500
+
+
+
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 if not XAI_API_KEY:
@@ -133,6 +136,9 @@ def spa_any(any_path=None):
     return render_template("index.html")
 
 
+
+
+
 # ---- API: xAI ----
 @app.post("/api/start")
 def api_start():
@@ -149,21 +155,26 @@ def api_start():
     except ValueError:
         duration = 8
 
-    aspect_ratio = request.form.get("aspect_ratio", "16:9")
-    resolution = request.form.get("resolution", "480p")
+    resolution = (request.form.get("resolution") or "480p").strip() or "480p"
+    aspect_ratio = (request.form.get("aspect_ratio") or "16:9").strip() or "16:9"
 
     image = request.files.get("image")
 
+    # IMPORTANT:
+    # - If an image is provided, DO NOT pass aspect_ratio to the xAI video API.
+    #   The API defaults to the input image aspect ratio unless aspect_ratio is explicitly sent.
     kwargs = dict(
         prompt=prompt,
         model=model,
         duration=duration,
-        aspect_ratio=aspect_ratio,
         resolution=resolution,
     )
 
-    if image and image.filename:
+    has_image = bool(image and image.filename)
+    if has_image:
         kwargs["image_url"] = file_to_data_uri(image)
+    else:
+        kwargs["aspect_ratio"] = aspect_ratio
 
     active_id = (request.headers.get("X-Active-Request-Id") or "").strip()
     if active_id:
@@ -185,7 +196,7 @@ def api_start():
 
     log.info(
         "Start req_id=%s model=%s duration=%s aspect=%s res=%s has_image=%s",
-        req_id, model, duration, aspect_ratio, resolution, bool(image and image.filename)
+        req_id, model, duration, (aspect_ratio if not has_image else "(image-default)"), resolution, has_image
     )
 
     try:
@@ -204,6 +215,10 @@ def api_start():
             resp.headers["Retry-After"] = str(retry_after)
             return resp
         raise
+
+
+
+
 
 @app.get("/favicon.ico")
 def favicon_ico():
@@ -318,6 +333,8 @@ def api_ffmpeg_concat():
         req_id=req_id,
     )
 
+
+
 # ---- API: ffmpeg audio replace/mix ----
 @app.post("/api/ffmpeg/audio")
 def api_ffmpeg_audio():
@@ -335,9 +352,19 @@ def api_ffmpeg_audio():
         return jsonify(error="Missing audio file", req_id=req_id), 400
 
     try:
+        if video_url.startswith("/"):
+            video_url = request.host_url.rstrip("/") + video_url
+
+        parsed = urlparse(video_url)
+        if parsed.path.endswith("/api/video_proxy") or parsed.path.endswith("/api/video_proxy/") or parsed.path.endswith("/api/video_proxy"):
+            qs = parse_qs(parsed.query or "")
+            u = (qs.get("url", [""])[0] or "").strip()
+            if u:
+                video_url = u
+
         video_url = _safe_http_url(video_url)
-    except ValueError:
-        return jsonify(error="Invalid video_url", req_id=req_id), 400
+    except ValueError as e:
+        return jsonify(error=str(e) or "Invalid video_url", req_id=req_id), 400
 
     out_name = _output_name(f"audio_{mode}", "mp4")
     out_path = os.path.join(OUTPUT_DIR, out_name)
@@ -385,6 +412,227 @@ def api_ffmpeg_audio():
     )
 
 
+
+@app.post("/api/tripo/start")
+def api_tripo_start():
+    req_id = request.req_id
+
+    api_key = os.getenv("TRIPO_API_KEY")
+    if not api_key:
+        return jsonify(error="Missing TRIPO_API_KEY environment variable.", req_id=req_id), 500
+
+    image = request.files.get("image")
+    if not image or not image.filename:
+        return jsonify(error="Missing image", req_id=req_id), 400
+
+    allowed_model_versions = [
+        "v3.1-20260211",
+        "v3.0-20250812",
+        "v2.5-20250123",
+        "v2.0-20240919",
+        "v1.4-20240625",
+        "Turbo-v1.0-20250506",
+        "",
+    ]
+    allowed_texture_quality = ["standard", "detailed"]
+    allowed_orientation = ["default", "align_image"]
+
+    defaults = {
+        "model_version": os.getenv("TRIPO_MODEL_VERSION", ""),
+        "texture_quality": os.getenv("TRIPO_TEXTURE_QUALITY", "standard"),
+        "orientation": os.getenv("TRIPO_ORIENTATION", "default"),
+        "auto_size": os.getenv("TRIPO_AUTO_SIZE", "true").strip().lower() in ("1", "true", "yes", "on"),
+        "compress": os.getenv("TRIPO_COMPRESS", "false").strip().lower() in ("1", "true", "yes", "on"),
+    }
+
+    if not defaults["model_version"]:
+        for v in allowed_model_versions:
+            if v:
+                defaults["model_version"] = v
+                break
+
+    model_version = (request.form.get("model_version") or defaults["model_version"] or "").strip()
+    texture_quality = (request.form.get("texture_quality") or defaults["texture_quality"] or "standard").strip().lower()
+    orientation = (request.form.get("orientation") or defaults["orientation"] or "default").strip().lower()
+    auto_size = str(request.form.get("auto_size") if request.form.get("auto_size") is not None else defaults["auto_size"]).strip().lower() in ("1", "true", "yes", "on")
+    compress = str(request.form.get("compress") if request.form.get("compress") is not None else defaults["compress"]).strip().lower() in ("1", "true", "yes", "on")
+
+    version_ok = (model_version in allowed_model_versions)
+    if not version_ok and model_version:
+        import re
+        version_ok = bool(re.match(r"^(Turbo-v1\.0-\d{8}|v\d+\.\d+-\d{8})$", model_version))
+
+    if not version_ok:
+        return jsonify(error=f"Invalid model_version: {model_version}", req_id=req_id), 400
+    if texture_quality not in allowed_texture_quality:
+        return jsonify(error=f"Invalid texture_quality: {texture_quality}", req_id=req_id), 400
+    if orientation not in allowed_orientation:
+        return jsonify(error=f"Invalid orientation: {orientation}", req_id=req_id), 400
+
+    import asyncio
+    from tripo3d import TripoClient
+
+    suffix = os.path.splitext(image.filename)[1].lower() or ".png"
+
+    with tempfile.TemporaryDirectory() as td:
+        img_path = os.path.join(td, f"input{suffix}")
+        image.save(img_path)
+
+        async def _run():
+            async with TripoClient(api_key=api_key) as c:
+                kwargs = dict(
+                    image=img_path,
+                    texture_quality=texture_quality,
+                    orientation=orientation,
+                    auto_size=auto_size,
+                    compress=compress,
+                )
+                if model_version:
+                    kwargs["model_version"] = model_version
+                task_id = await c.image_to_model(**kwargs)
+                return task_id
+
+        try:
+            task_id = asyncio.run(_run())
+        except Exception as e:
+            return jsonify(error=f"Tripo start failed: {e}", req_id=req_id), 500
+
+    return jsonify(task_id=task_id, req_id=req_id)
+
+
+@app.get("/api/tripo/options")
+def api_tripo_options():
+    req_id = request.req_id
+
+    defaults = {
+        "model_version": os.getenv("TRIPO_MODEL_VERSION", ""),
+        "texture_quality": os.getenv("TRIPO_TEXTURE_QUALITY", "standard"),
+        "orientation": os.getenv("TRIPO_ORIENTATION", "default"),
+        "auto_size": os.getenv("TRIPO_AUTO_SIZE", "true").strip().lower() in ("1", "true", "yes", "on"),
+        "compress": os.getenv("TRIPO_COMPRESS", "false").strip().lower() in ("1", "true", "yes", "on"),
+    }
+
+    model_versions = [
+        "v3.1-20260211",
+        "v3.0-20250812",
+        "v2.5-20250123",
+        "v2.0-20240919",
+        "v1.4-20240625",
+        "Turbo-v1.0-20250506",
+        "",
+    ]
+
+    if not defaults["model_version"]:
+        for v in model_versions:
+            if v:
+                defaults["model_version"] = v
+                break
+
+    if defaults["model_version"] and defaults["model_version"] not in model_versions:
+        model_versions = [defaults["model_version"]] + model_versions
+
+    return jsonify(
+        defaults=defaults,
+        enums={
+            "model_version": model_versions,
+            "texture_quality": ["standard", "detailed"],
+            "orientation": ["default", "align_image"],
+            "auto_size": [False, True],
+            "compress": [False, True],
+        },
+        req_id=req_id,
+    )  
+
+
+@app.get("/api/tripo/status/<task_id>")
+def api_tripo_status(task_id: str):
+    req_id = request.req_id
+
+    api_key = os.getenv("TRIPO_API_KEY")
+    if not api_key:
+        return jsonify(error="Missing TRIPO_API_KEY environment variable.", req_id=req_id), 500
+
+    import asyncio
+    from tripo3d import TripoClient
+
+    async def _run():
+        async with TripoClient(api_key=api_key) as c:
+            task = await c.get_task(task_id)
+            return task
+
+    try:
+        task = asyncio.run(_run())
+    except Exception as e:
+        return jsonify(error=f"Tripo status failed: {e}", req_id=req_id), 500
+
+    status = getattr(task, "status", None) or "unknown"
+    progress = getattr(task, "progress", None)
+
+    out = getattr(task, "output", None)
+    out_model = getattr(out, "model", None) if out else None
+    out_base = getattr(out, "base_model", None) if out else None
+    out_pbr = getattr(out, "pbr_model", None) if out else None
+    out_render = getattr(out, "rendered_image", None) if out else None
+
+    return jsonify(
+        status=status,
+        progress=progress,
+        output={
+            "model": out_model,
+            "base_model": out_base,
+            "pbr_model": out_pbr,
+            "rendered_image": out_render,
+        },
+        req_id=req_id,
+    )
+
+
+
+
+@app.route("/api/tripo/download/<task_id>", methods=["GET"])
+def api_tripo_download(task_id: str):
+  url = request.args.get("url", type=str) or ""
+  url = url.strip()
+  if not url:
+    return jsonify({"error": "missing url query param"}), 400
+
+  base_dir = os.path.dirname(os.path.abspath(__file__))
+  models_dir = os.path.join(base_dir, "models")
+  os.makedirs(models_dir, exist_ok=True)
+
+  safe_task = "".join([c for c in (task_id or "") if c.isalnum() or c in ("-", "_")])[:120] or "task"
+  filename = f"tripo_{safe_task}.glb"
+  out_path = os.path.join(models_dir, filename)
+
+  if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+    return jsonify({"url": f"/models/{filename}", "filename": filename})
+
+  try:
+    r = requests.get(url, stream=True, timeout=120)
+    r.raise_for_status()
+  except Exception as e:
+    return jsonify({"error": f"download fetch failed: {e}"}), 502
+
+  try:
+    with open(out_path, "wb") as f:
+      for chunk in r.iter_content(chunk_size=1024 * 256):
+        if chunk:
+          f.write(chunk)
+  except Exception as e:
+    try:
+      if os.path.exists(out_path):
+        os.remove(out_path)
+    except Exception:
+      pass
+    return jsonify({"error": f"failed to save file: {e}"}), 500
+
+  return jsonify({"url": f"/models/{filename}", "filename": filename})
+
+
+@app.route("/models/<path:filename>", methods=["GET"])
+def serve_model_file(filename: str):
+  models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+  return send_from_directory(models_dir, filename, as_attachment=False)
 
 
 @app.post("/api/enhance/frame")

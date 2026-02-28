@@ -1,3 +1,7 @@
+
+
+
+
 const $ = (sel, root = document) => root.querySelector(sel);
 
 const JOBS_KEY = "grok_video_jobs_v4";
@@ -5,9 +9,71 @@ const COOL_KEY = "grok_cooldown_until_ms";
 
 const VIDEO_ORDER_KEY = "grok_video_order_v1";
 
-/* Stores large frame blobs in IndexedDB to avoid localStorage quota issues. */
+
+
 const FRAMES_DB_NAME = "grok_frames_db_v1";
 const FRAMES_STORE = "frames";
+
+const MODELS_DB_NAME = "grok_models_db_v1";
+const MODELS_STORE = "models";
+
+function openModelsDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(MODELS_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(MODELS_STORE)) db.createObjectStore(MODELS_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbPutModelBlob(key, blob) {
+  const db = await openModelsDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODELS_STORE, "readwrite");
+    tx.oncomplete = () => { try { db.close(); } catch {} resolve(true); };
+    tx.onerror = () => { try { db.close(); } catch {} reject(tx.error || new Error("idb model put failed")); };
+    tx.objectStore(MODELS_STORE).put(blob, key);
+  });
+}
+
+async function idbGetModelBlob(key) {
+  const db = await openModelsDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODELS_STORE, "readonly");
+    const req = tx.objectStore(MODELS_STORE).get(key);
+    req.onsuccess = () => { try { db.close(); } catch {} resolve(req.result || null); };
+    req.onerror = () => { try { db.close(); } catch {} reject(req.error); };
+  });
+}
+
+async function idbDelModelBlob(key) {
+  const db = await openModelsDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODELS_STORE, "readwrite");
+    tx.oncomplete = () => { try { db.close(); } catch {} resolve(true); };
+    tx.onerror = () => { try { db.close(); } catch {} reject(tx.error || new Error("idb model del failed")); };
+    tx.objectStore(MODELS_STORE).delete(key);
+  });
+}
+
+async function idbClearAllModels() {
+  const db = await openModelsDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(MODELS_STORE, "readwrite");
+    tx.oncomplete = () => { try { db.close(); } catch {} resolve(true); };
+    tx.onerror = () => { try { db.close(); } catch {} reject(tx.error || new Error("idb model clear failed")); };
+    tx.objectStore(MODELS_STORE).clear();
+  });
+}
+
+async function fetchAsBlob(url) {
+  const r = await fetch(String(url || ""), { cache: "no-store", mode: "cors" });
+  if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+  return await r.blob();
+}
 
 /* Opens (or creates) the frames IndexedDB. */
 function openFramesDB() {
@@ -1360,7 +1426,11 @@ function tickCooldown(badgeEl, btnGenerate) {
   return cooling;
 }
 
-/* Renders the horizontal shelf of DONE videos and handles selection + drag reorder + thumb AR. */
+
+
+
+/* Renders the horizontal shelf of DONE videos and handles selection + drag reorder + thumb AR.
+   Enhanced: clicking thumbnails no longer re-renders the whole shelf (prevents “shake/reload”). */
 function renderVideoShelf(state) {
   const shelf = document.getElementById("videoShelf");
   if (!shelf) return;
@@ -1374,15 +1444,18 @@ function renderVideoShelf(state) {
   const byId = new Map(jobsDone.map(j => [j.request_id, j]));
   const persisted = loadVideoOrder();
 
+  // Build ordered ids (persisted first, then new ones)
   const orderedIds = [];
   for (const id of persisted) if (byId.has(id)) orderedIds.push(id);
   for (const j of jobsDone) if (!orderedIds.includes(j.request_id)) orderedIds.push(j.request_id);
 
   saveVideoOrder(orderedIds);
 
+  // Normalize selection against existing ids
   const selectedSet = new Set(Array.isArray(state.selectedVideoIds) ? state.selectedVideoIds : []);
   state.selectedVideoIds = orderedIds.filter(id => selectedSet.has(id));
 
+  // Render markup once
   shelf.innerHTML = orderedIds.map(id => {
     const j = byId.get(id);
     const when = j && j.created_at ? new Date(j.created_at).toLocaleString() : "";
@@ -1399,6 +1472,7 @@ function renderVideoShelf(state) {
     `;
   }).join("");
 
+  // Update card aspect ratio CSS variable after metadata loads (optional polish)
   const vids = shelf.querySelectorAll("video.videoThumb");
   for (const v of vids) {
     v.onloadedmetadata = () => {
@@ -1411,9 +1485,20 @@ function renderVideoShelf(state) {
     };
   }
 
+  // Helper: paint selection without re-rendering (prevents shelf “shake”)
+  function paintSelection() {
+    const cards = shelf.querySelectorAll(".videoCard");
+    for (const el of cards) {
+      const vid = el.getAttribute("data-vid");
+      el.classList.toggle("selected", !!vid && selectedSet.has(vid));
+    }
+  }
+
+  // Selection + load into player (NO re-render on click)
   shelf.onclick = (e) => {
     const card = e.target.closest(".videoCard");
     if (!card) return;
+
     const id = card.getAttribute("data-vid");
     if (!id) return;
 
@@ -1435,9 +1520,10 @@ function renderVideoShelf(state) {
       showPlayer(job.url);
     }
 
-    renderVideoShelf(state);
+    paintSelection();
   };
 
+  // Drag reorder (re-render only when order changes)
   let dragFromId = null;
 
   shelf.ondragstart = (e) => {
@@ -1474,6 +1560,7 @@ function renderVideoShelf(state) {
 
     if (!fromId || !toId || fromId === toId) return;
 
+    // Rebuild an order list (safe against missing ids)
     const order = loadVideoOrder().filter(id => byId.has(id));
     for (const id of orderedIds) if (!order.includes(id)) order.push(id);
 
@@ -1486,12 +1573,18 @@ function renderVideoShelf(state) {
 
     saveVideoOrder(order);
 
+    // Keep selection, but reorder selectedVideoIds to match new order
     const sel = new Set(Array.isArray(state.selectedVideoIds) ? state.selectedVideoIds : []);
     state.selectedVideoIds = order.filter(x => sel.has(x));
 
     renderVideoShelf(state);
   };
 }
+
+
+
+
+
 
 /* Joins selected shelf videos via backend ffmpeg concat endpoint. */
 async function joinSelected(state, statusEl, hintEl) {
@@ -1635,354 +1728,502 @@ async function audioOp(state, mode, statusEl, hintEl) {
 
 
 
-// /* Boots the SPA generate view, wires handlers, and keeps history + shelf in sync. */
-// function boot() {
-//   if (!location.pathname.startsWith("/app")) {
-//     history.replaceState(null, "", "/app");
-//   }
+let _threeMods = null;
+let _modelViewer = null;
 
-//   const view = $("#view");
-//   const tpl = $("#tpl-generate");
-//   view.innerHTML = "";
-//   view.appendChild(tpl.content.cloneNode(true));
+let _lastModelIdbKey = "";
+let _lastModelObjectUrl = "";
+let _lastModelMeta = "";
 
-//   const state = {
-//     capturedFrame: null,
-//     activeJobId: null,
-//     selectedVideoIds: [],
-//     useCapturedFrame: false,
-//     uploadPreviewUrl: null,
-//   };
 
-//   const promptEl = $("#prompt");
-//   const durationEl = $("#duration");
-//   const aspectEl = $("#aspect_ratio");
-//   const resEl = $("#resolution");
-//   const imageEl = $("#image");
 
-//   const statusEl = $("#status");
-//   const resultEl = $("#result");
-//   const hintEl = $("#hint");
 
-//   const badgeEl = $("#cooldownBadge");
 
-//   const btnHistory = $("#topHistory");
-//   const btnDrawerClose = $("#btn-drawer-close");
-//   const overlay = $("#drawerOverlay");
-//   const btnRefreshJobs = $("#btn-refresh-jobs");
-//   const btnClearJobs = $("#btn-clear-jobs");
+/* Loads Three.js modules once (prefers local vendor, falls back to CDN). */
+/* Loads Three.js modules once (prefers local vendor, falls back to CDN). */
+async function loadThreeMods() {
+  if (_threeMods) return _threeMods;
 
-//   const btnCaptureFrame = $("#btn-capture-frame");
-//   const btnUpscaleFrame = $("#btn-upscale-frame");
-//   const btnEnhanceFrame = $("#btn-enhance-frame");
-//   const btnClearFrame = $("#btn-clear-frame");
-//   const btnDownloadFrame = $("#btn-download-frame");
+  const tryImport = async (threeUrl, gltfUrl, orbitUrl, dracoUrl, meshoptUrl) => {
+    const THREE = await import(threeUrl);
+    const { GLTFLoader } = await import(gltfUrl);
+    const { OrbitControls } = await import(orbitUrl);
+    const { DRACOLoader } = await import(dracoUrl);
+    const { MeshoptDecoder } = await import(meshoptUrl);
+    return { THREE, GLTFLoader, OrbitControls, DRACOLoader, MeshoptDecoder };
+  };
 
-//   const btnClearStatus = $("#btn-clear-status");
-//   const btnJoin = $("#btn-join");
-//   const btnAudioReplace = $("#btn-audio-replace");
-//   const btnAudioMix = $("#btn-audio-mix");
+  try {
+    _threeMods = await tryImport(
+      "./vendor/three/build/three.module.js",
+      "./vendor/three/examples/jsm/loaders/GLTFLoader.js",
+      "./vendor/three/examples/jsm/controls/OrbitControls.js",
+      "./vendor/three/examples/jsm/loaders/DRACOLoader.js",
+      "./vendor/three/examples/jsm/libs/meshopt_decoder.module.js"
+    );
+    return _threeMods;
+  } catch {}
 
-//   const btnGenerate = $("#btn-generate");
+  _threeMods = await tryImport(
+    "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+    "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/loaders/GLTFLoader.js",
+    "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js",
+    "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/loaders/DRACOLoader.js",
+    "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/libs/meshopt_decoder.module.js"
+  );
+  return _threeMods;
+}
 
-//   const framePreview = document.getElementById("framePreview");
-//   const imgOverlay = document.getElementById("imgOverlay");
-//   const imgOverlayClose = document.getElementById("imgOverlayClose");
+function getAssetSrc(url) {
+  const u = String(url || "");
+  if (!u) return "";
+  if (u.startsWith("http://") || u.startsWith("https://")) {
+    return `/api/video_proxy?url=${encodeURIComponent(u)}`;
+  }
+  return u;
+}
 
-//   if (imageEl) {
-//     imageEl.addEventListener("change", () => {
-//       state.useCapturedFrame = false;
-//       updateFrameUI(state);
-//       hintEl.textContent = (imageEl.files && imageEl.files[0]) ? "Upload selected as input." : "";
-//     });
-//   }
+function disposeModelViewer() {
+  if (!_modelViewer) return;
 
-//   function selectJob(requestId) {
-//     const job = getJob(requestId);
+  try { cancelAnimationFrame(_modelViewer.rafId); } catch {}
+  try { window.removeEventListener("resize", _modelViewer.onResize); } catch {}
+  try { _modelViewer.controls && _modelViewer.controls.dispose(); } catch {}
 
-//     state.activeJobId = requestId;
-//     renderFrameHistory(state);
+  try {
+    _modelViewer.scene && _modelViewer.scene.traverse((obj) => {
+      if (!obj) return;
+      if (obj.geometry) { try { obj.geometry.dispose(); } catch {} }
+      if (obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m) continue;
+          for (const k of Object.keys(m)) {
+            const v = m[k];
+            if (v && v.isTexture) { try { v.dispose(); } catch {} }
+          }
+          try { m.dispose(); } catch {}
+        }
+      }
+    });
+  } catch {}
 
-//     if (!job) {
-//       statusEl.textContent = `Unknown job\nrequest_id: ${requestId}`;
-//       resultEl.innerHTML = "";
-//       resetPlayer();
-//       closeDrawer();
-//       return;
-//     }
+  try { _modelViewer.renderer && _modelViewer.renderer.dispose(); } catch {}
+  try { _modelViewer.renderer && _modelViewer.renderer.forceContextLoss && _modelViewer.renderer.forceContextLoss(); } catch {}
+  _modelViewer = null;
+}
 
-//     statusEl.textContent = `${(job.status || "unknown").toUpperCase()}\nrequest_id: ${requestId}${job.url ? `\nurl: ${job.url}` : ""}`;
-//     resultEl.innerHTML = job.url
-//       ? `<div class="muted">Loaded from history.</div><div style="margin-top:6px;"><a href="${job.url}" target="_blank" rel="noreferrer">Open video URL</a></div>`
-//       : `<div class="muted">No URL saved yet — polling.</div>`;
+function revokeLastModelObjectUrl() {
+  if (_lastModelObjectUrl) {
+    try { URL.revokeObjectURL(_lastModelObjectUrl); } catch {}
+  }
+  _lastModelObjectUrl = "";
+}
 
-//     if (job.url) {
-//       resetPlayer();
-//       showPlayer(job.url);
-//     } else {
-//       resetPlayer();
-//       poll(requestId, statusEl, resultEl, { loadPlayer: true });
-//     }
 
-//     state.selectedVideoIds = [requestId];
-//     renderVideoShelf(state);
 
-//     closeDrawer();
-//   }
 
-//   function refreshJobsStatuses() {
-//     const jobs = loadJobs().slice(0, 15);
-//     for (const j of jobs) {
-//       if (!j || !j.request_id) continue;
-//       if (j.status === "done" && j.url) continue;
-//       fetch(`/api/status/${encodeURIComponent(j.request_id)}`)
-//         .then(r => r.json())
-//         .then(data => {
-//           setJobStatus(j.request_id, { status: data.status || "unknown", url: data.url || undefined });
-//           renderJobsList(selectJob);
-//           renderVideoShelf(state);
-//           renderFrameHistory(state);
-//         })
-//         .catch(() => {});
-//     }
-//   }
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
-//   async function readImageAspectRatio(fileOrBlob) {
-//     return await new Promise((resolve) => {
-//       const img = new Image();
-//       const url = URL.createObjectURL(fileOrBlob);
-//       img.onload = () => {
-//         const w = img.naturalWidth || 0;
-//         const h = img.naturalHeight || 0;
-//         try { URL.revokeObjectURL(url); } catch {}
-//         resolve({ w, h });
-//       };
-//       img.onerror = () => {
-//         try { URL.revokeObjectURL(url); } catch {}
-//         resolve({ w: 0, h: 0 });
-//       };
-//       img.src = url;
-//     });
-//   }
 
-//   renderJobsList(selectJob);
-//   updateFrameUI(state);
-//   renderFrameHistory(state);
-//   renderVideoShelf(state);
+async function openModelOverlay(glbUrl, metaText) {
+  const overlay = document.getElementById("modelOverlay");
+  const stage = document.getElementById("modelOverlayStage");
+  const canvas = document.getElementById("modelCanvas");
+  const meta = document.getElementById("modelOverlayMeta");
+  if (!overlay || !stage || !canvas) return;
 
-//   if (btnHistory) btnHistory.onclick = () => { renderJobsList(selectJob); openDrawer(); };
-//   if (btnDrawerClose) btnDrawerClose.onclick = () => closeDrawer();
-//   if (overlay) overlay.onclick = () => closeDrawer();
+  overlay.classList.add("open");
+  overlay.setAttribute("aria-hidden", "false");
+  try { stage.focus(); } catch {}
 
-//   if (btnRefreshJobs) btnRefreshJobs.onclick = () => refreshJobsStatuses();
+  if (meta) meta.textContent = String(metaText || "");
 
-//   if (btnClearJobs) btnClearJobs.onclick = async () => {
-//     saveJobs([]);
-//     try { await idbClearAllFrames(); } catch {}
-//     renderJobsList(selectJob);
-//     state.activeJobId = null;
-//     renderFrameHistory(state);
-//     statusEl.textContent = "Idle.";
-//     resultEl.innerHTML = "";
-//     hintEl.textContent = "";
-//     resetPlayer();
-//   };
+  try {
+    await renderGlbToCanvas(glbUrl, canvas);
+  } catch (e) {
+    if (meta) meta.textContent = `${String(metaText || "")}\n\n3D preview error:\n${String(e && e.message ? e.message : e)}`;
+  }
+}
 
-//   if (btnClearStatus) btnClearStatus.onclick = () => {
-//     statusEl.textContent = "Idle.";
-//     resultEl.innerHTML = "";
-//   };
+function closeModelOverlay() {
+  const overlay = document.getElementById("modelOverlay");
+  const meta = document.getElementById("modelOverlayMeta");
+  if (meta) meta.textContent = "";
 
-//   if (btnJoin) btnJoin.onclick = () => joinSelected(state, statusEl, hintEl);
-//   if (btnAudioReplace) btnAudioReplace.onclick = () => audioOp(state, "replace", statusEl, hintEl);
-//   if (btnAudioMix) btnAudioMix.onclick = () => audioOp(state, "mix", statusEl, hintEl);
+  if (_modelViewer) {
+    try { cancelAnimationFrame(_modelViewer.rafId); } catch {}
+    try { window.removeEventListener("resize", _modelViewer.onResize); } catch {}
+    try { _modelViewer.controls && _modelViewer.controls.dispose(); } catch {}
+    try { _modelViewer.renderer && _modelViewer.renderer.dispose(); } catch {}
+    try { _modelViewer.renderer && _modelViewer.renderer.forceContextLoss && _modelViewer.renderer.forceContextLoss(); } catch {}
 
-//   if (btnCaptureFrame) btnCaptureFrame.onclick = async () => {
-//     hintEl.textContent = "Capturing frame…";
+    try {
+      _modelViewer.scene && _modelViewer.scene.traverse((obj) => {
+        if (!obj) return;
+        if (obj.geometry) { try { obj.geometry.dispose(); } catch {} }
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of mats) {
+            if (!m) continue;
+            for (const k of Object.keys(m)) {
+              const v = m[k];
+              if (v && v.isTexture) { try { v.dispose(); } catch {} }
+            }
+            try { m.dispose(); } catch {}
+          }
+        }
+      });
+    } catch {}
 
-//     const frame = await captureFrameFromPlayer(state);
-//     updateFrameUI(state);
+    _modelViewer = null;
+  }
 
-//     if (!frame) {
-//       hintEl.textContent = "Capture failed (player not ready or frame access blocked).";
-//       return;
-//     }
+  if (!overlay) return;
+  overlay.classList.remove("open");
+  overlay.setAttribute("aria-hidden", "true");
+}
 
-//     if (imageEl) imageEl.value = "";
-//     state.useCapturedFrame = true;
 
-//     const saved = saveCapturedFrameToJob(state);
-//     renderFrameHistory(state);
 
-//     hintEl.textContent = saved
-//       ? `Frame captured + saved: ${frame.width}×${frame.height} @ t=${frame.time.toFixed(3)}s`
-//       : `Frame captured: ${frame.width}×${frame.height} @ t=${frame.time.toFixed(3)}s (select a job to save)`;
-//   };
+async function renderGlbToCanvas(glbUrl, canvas) {
+  if (!canvas) return;
 
-//   if (btnUpscaleFrame) btnUpscaleFrame.onclick = async () => {
-//     await upscaleCapturedFrame(state, statusEl, hintEl);
-//     updateFrameUI(state);
-//   };
+  if (_modelViewer) {
+    try { cancelAnimationFrame(_modelViewer.rafId); } catch {}
+    try { window.removeEventListener("resize", _modelViewer.onResize); } catch {}
+    try { _modelViewer.controls && _modelViewer.controls.dispose(); } catch {}
+    try { _modelViewer.renderer && _modelViewer.renderer.dispose(); } catch {}
+    try { _modelViewer.renderer && _modelViewer.renderer.forceContextLoss && _modelViewer.renderer.forceContextLoss(); } catch {}
+    try {
+      _modelViewer.scene && _modelViewer.scene.traverse((obj) => {
+        if (!obj) return;
+        if (obj.geometry) { try { obj.geometry.dispose(); } catch {} }
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of mats) {
+            if (!m) continue;
+            for (const k of Object.keys(m)) {
+              const v = m[k];
+              if (v && v.isTexture) { try { v.dispose(); } catch {} }
+            }
+            try { m.dispose(); } catch {}
+          }
+        }
+      });
+    } catch {}
+    _modelViewer = null;
+  }
 
-//   if (btnEnhanceFrame) btnEnhanceFrame.onclick = async () => {
-//     await enhanceCapturedFrame(state, statusEl, hintEl);
-//     updateFrameUI(state);
-//   };
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  await new Promise((r) => requestAnimationFrame(() => r()));
 
-//   if (btnDownloadFrame) btnDownloadFrame.onclick = () => {
-//     if (!state.capturedFrame || !state.capturedFrame.blob) {
-//       hintEl.textContent = "No frame to download.";
-//       return;
-//     }
-//     const name = `frame_${state.activeJobId || "nojob"}_t${(typeof state.capturedFrame.time === "number" ? state.capturedFrame.time.toFixed(3) : "na")}.png`;
-//     downloadBlobAsFile(state.capturedFrame.blob, name);
-//   };
+  const parent = canvas.parentElement;
+  if (!parent) throw new Error("3D canvas is missing parent element.");
 
-//   if (btnClearFrame) btnClearFrame.onclick = () => {
-//     clearCapturedFrame(state);
-//     updateFrameUI(state);
-//     hintEl.textContent = "Frame cleared.";
-//   };
+  const fresh = canvas.cloneNode(false);
+  fresh.id = canvas.id;
+  fresh.className = canvas.className;
+  fresh.style.cssText = canvas.style.cssText;
+  parent.replaceChild(fresh, canvas);
+  canvas = fresh;
 
-//   if (framePreview) {
-//     framePreview.addEventListener("click", () => {
-//       const src = framePreview.getAttribute("src") || "";
-//       if (!src) return;
-//       openImageOverlay(src);
-//     });
-//   }
+  const w0 = canvas.clientWidth || canvas.parentElement?.clientWidth || 1;
+  const h0 = canvas.clientHeight || canvas.parentElement?.clientHeight || 1;
+  if (w0 <= 1 || h0 <= 1) throw new Error("3D canvas has no size (overlay hidden or layout not ready).");
 
-//   if (imgOverlayClose) imgOverlayClose.onclick = () => closeImageOverlay();
-//   if (imgOverlay) {
-//     imgOverlay.addEventListener("click", (e) => {
-//       if (e.target === imgOverlay) closeImageOverlay();
-//     });
-//   }
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(w0, h0, false);
 
-//   $("#btn-clear").addEventListener("click", () => {
-//     promptEl.value = "";
-//     if (imageEl) imageEl.value = "";
-//     state.useCapturedFrame = false;
+  const gl = renderer.getContext && renderer.getContext();
+  if (!gl) throw new Error("WebGL context not available (renderer.getContext() is null).");
+  if (gl.getContextAttributes && gl.getContextAttributes() === null) {
+    try { renderer.dispose(); } catch {}
+    throw new Error("WebGL context lost/unavailable (getContextAttributes() is null).");
+  }
 
-//     if (state.uploadPreviewUrl) {
-//       try { URL.revokeObjectURL(state.uploadPreviewUrl); } catch {}
-//       state.uploadPreviewUrl = null;
-//     }
+  const scene = new THREE.Scene();
+  scene.background = null;
 
-//     statusEl.textContent = "Idle.";
-//     resultEl.innerHTML = "";
-//     hintEl.textContent = "";
-//     resetPlayer();
-//     clearCapturedFrame(state);
-//     updateFrameUI(state);
-//   });
+  const camera = new THREE.PerspectiveCamera(55, Math.max(1e-6, w0 / h0), 0.01, 2000);
 
-//   if (badgeEl && btnGenerate) {
-//     tickCooldown(badgeEl, btnGenerate);
-//     setInterval(() => tickCooldown(badgeEl, btnGenerate), 250);
-//   }
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.15);
+  hemi.position.set(0, 1, 0);
+  scene.add(hemi);
 
-//   $("#btn-generate").addEventListener("click", async () => {
-//     if (badgeEl && btnGenerate && tickCooldown(badgeEl, btnGenerate)) {
-//       hintEl.textContent = "Wait for cooldown to finish.";
-//       return;
-//     }
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(2.5, 4.0, 3.0);
+  scene.add(dir);
 
-//     resultEl.innerHTML = "";
-//     hintEl.textContent = "";
-//     resetPlayer();
+  const grid = new THREE.GridHelper(4, 20, 0x666666, 0x333333);
+  grid.position.y = 0;
+  scene.add(grid);
 
-//     const prompt = (promptEl.value || "").trim();
-//     if (!prompt) {
-//       statusEl.textContent = "Please enter a prompt.";
-//       return;
-//     }
+  const axes = new THREE.AxesHelper(0.75);
+  scene.add(axes);
 
-//     const form = new FormData();
-//     form.append("prompt", prompt);
-//     form.append("duration", String(parseInt(durationEl.value, 10) || 8));
-//     form.append("resolution", resEl.value);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.rotateSpeed = 0.7;
+  controls.zoomSpeed = 0.9;
+  controls.panSpeed = 0.7;
 
-//     const file = imageEl && imageEl.files && imageEl.files[0] ? imageEl.files[0] : null;
-//     let sourceImageBlob = null;
+  const resize = () => {
+    const w = canvas.clientWidth || canvas.parentElement?.clientWidth || 1;
+    const h = canvas.clientHeight || canvas.parentElement?.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = Math.max(1e-6, w / h);
+    camera.updateProjectionMatrix();
+  };
 
-//     if (state.useCapturedFrame && state.capturedFrame && state.capturedFrame.blob) {
-//       sourceImageBlob = state.capturedFrame.blob;
-//       const f = new File([state.capturedFrame.blob], "frame.png", { type: "image/png" });
-//       form.append("image", f);
-//     } else if (file) {
-//       sourceImageBlob = file;
-//       form.append("image", file);
-//     }
+  const loader = new GLTFLoader();
 
-//     if (sourceImageBlob) {
-//       const { w, h } = await readImageAspectRatio(sourceImageBlob);
-//       if (w && h) {
-//         const ratio = w / h;
-//         const candidates = [
-//           { v: "1:1", r: 1 },
-//           { v: "16:9", r: 16 / 9 },
-//           { v: "9:16", r: 9 / 16 },
-//           { v: "4:3", r: 4 / 3 },
-//           { v: "3:4", r: 3 / 4 },
-//           { v: "3:2", r: 3 / 2 },
-//           { v: "2:3", r: 2 / 3 },
-//         ];
-//         let best = candidates[0];
-//         let bestDiff = Math.abs(ratio - best.r);
-//         for (const c of candidates) {
-//           const d = Math.abs(ratio - c.r);
-//           if (d < bestDiff) {
-//             best = c;
-//             bestDiff = d;
-//           }
-//         }
-//         form.append("aspect_ratio", best.v);
-//       } else {
-//         form.append("aspect_ratio", aspectEl.value);
-//       }
-//     } else {
-//       form.append("aspect_ratio", aspectEl.value);
-//     }
+  /* Enables DRACO decoding for compressed GLB/GLTF assets. */
+  try {
+    const draco = new DRACOLoader();
+    draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+    loader.setDRACOLoader(draco);
+  } catch {}
 
-//     statusEl.textContent = "Starting…";
-//     hintEl.textContent = "Polling for result (can take minutes).";
+  try {
+    if (MeshoptDecoder) {
+      if (MeshoptDecoder.ready && typeof MeshoptDecoder.ready.then === "function") {
+        await MeshoptDecoder.ready;
+      }
+      loader.setMeshoptDecoder(MeshoptDecoder);
+    }
+  } catch {}
 
-//     const startResp = await fetch("/api/start", { method: "POST", body: form });
-//     const startData = await startResp.json();
+  let gltf;
+  try {
+    gltf = await new Promise((resolve, reject) => {
+      loader.load(String(glbUrl || ""), resolve, undefined, reject);
+    });
+  } catch (e) {
+    throw new Error(String(e && e.message ? e.message : e));
+  }
 
-//     if (!startResp.ok) {
-//       const ra = startData.retry_after || parseInt(startResp.headers.get("Retry-After") || "0", 10) || 0;
-//       statusEl.textContent = `Error: ${startData.error || "unknown"}\nreq_id: ${startData.req_id || ""}`.trim();
-//       if (startResp.status === 429 && ra) setCooldown(ra, badgeEl, btnGenerate, hintEl);
-//       hintEl.textContent = startResp.status === 429 ? `Rate-limited. Cooldown started (${ra || 60}s).` : "";
-//       return;
-//     }
+  const root = gltf.scene || gltf.scenes?.[0];
+  if (!root) throw new Error("GLB loaded but scene is missing");
 
-//     const requestId = startData.request_id;
+  scene.add(root);
+  root.updateWorldMatrix(true, true);
 
-//     upsertJob({
-//       request_id: requestId,
-//       prompt,
-//       created_at: new Date().toISOString(),
-//       status: "pending",
-//       url: undefined,
-//       frames: [],
-//     });
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
 
-//     state.activeJobId = requestId;
-//     state.selectedVideoIds = [requestId];
-//     renderJobsList(selectJob);
-//     renderFrameHistory(state);
-//     renderVideoShelf(state);
+  if (!Number.isFinite(center.x) || !Number.isFinite(center.y) || !Number.isFinite(center.z)) {
+    throw new Error("Model bounds invalid (failed to compute).");
+  }
 
-//     statusEl.textContent = `Started.\nrequest_id: ${requestId}`;
-//     await poll(requestId, statusEl, resultEl, { loadPlayer: true });
-//     hintEl.textContent = "";
-//     renderJobsList(selectJob);
-//     renderVideoShelf(state);
-//   });
-// }
+  root.position.sub(center);
+
+  const maxDim = Math.max(size.x || 1, size.y || 1, size.z || 1);
+  const fitDist = maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360));
+
+  camera.near = Math.max(0.01, fitDist / 100);
+  camera.far = Math.max(2000, fitDist * 25);
+  camera.position.set(0, maxDim * 0.25, fitDist * 1.35);
+  camera.updateProjectionMatrix();
+
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  resize();
+  const onResize = () => resize();
+  window.addEventListener("resize", onResize);
+
+  const loop = () => {
+    controls.update();
+    renderer.render(scene, camera);
+    _modelViewer.rafId = requestAnimationFrame(loop);
+  };
+
+  _modelViewer = { renderer, scene, camera, controls, rafId: 0, onResize };
+  loop();
+}
+
+
+
+
+
+/* Starts Tripo image-to-3D task from the active input image and previews the resulting GLB in the 3D overlay. */
+async function tripoImageTo3D(state, statusEl, hintEl) {
+  const imageEl = document.getElementById("image");
+  const file = imageEl && imageEl.files && imageEl.files[0] ? imageEl.files[0] : null;
+
+  let srcBlob = null;
+  let srcName = "input.png";
+
+  if (file && !state.useCapturedFrame) {
+    srcBlob = file;
+    srcName = file.name || "upload.png";
+  } else if (state && state.capturedFrame && state.capturedFrame.blob) {
+    srcBlob = state.capturedFrame.blob;
+    srcName = state.capturedFrame.name || "frame.png";
+  }
+
+  if (!srcBlob) {
+    if (hintEl) hintEl.textContent = "No input image for 3D (upload or capture first).";
+    return;
+  }
+
+  const mvEl = document.getElementById("tripo_model_version");
+  const tqEl = document.getElementById("tripo_texture_quality");
+  const orEl = document.getElementById("tripo_orientation");
+  const asEl = document.getElementById("tripo_auto_size");
+  const cpEl = document.getElementById("tripo_compress");
+
+  const uiDefaults = (state && state.tripoOptions && state.tripoOptions.defaults) ? state.tripoOptions.defaults : {};
+  const model_version = mvEl ? String(mvEl.value || uiDefaults.model_version || "") : String(uiDefaults.model_version || "");
+  const texture_quality = tqEl ? String(tqEl.value || uiDefaults.texture_quality || "standard") : String(uiDefaults.texture_quality || "standard");
+  const orientation = orEl ? String(orEl.value || uiDefaults.orientation || "default") : String(uiDefaults.orientation || "default");
+  const auto_size = asEl ? !!asEl.checked : !!uiDefaults.auto_size;
+  const compress = cpEl ? !!cpEl.checked : !!uiDefaults.compress;
+
+  if (statusEl) statusEl.textContent = "3D\nStarting…";
+  if (hintEl) hintEl.textContent = "Sending image to Tripo3D…";
+
+  const form = new FormData();
+  form.append("image", new File([srcBlob], srcName, { type: srcBlob.type || "image/png" }));
+  if (model_version) form.append("model_version", model_version);
+  form.append("texture_quality", texture_quality);
+  form.append("orientation", orientation);
+  form.append("auto_size", auto_size ? "true" : "false");
+  form.append("compress", compress ? "true" : "false");
+
+  let r, data;
+  try {
+    r = await fetch("/api/tripo/start", { method: "POST", body: form });
+    data = await r.json();
+  } catch {
+    if (statusEl) statusEl.textContent = "3D\nFailed (network/error).";
+    if (hintEl) hintEl.textContent = "";
+    return;
+  }
+
+  if (!r.ok) {
+    if (statusEl) statusEl.textContent = `3D\nError: ${data && data.error ? data.error : "unknown"}`.trim();
+    if (hintEl) hintEl.textContent = "";
+    return;
+  }
+
+  const taskId = data && data.task_id ? String(data.task_id) : "";
+  if (!taskId) {
+    if (statusEl) statusEl.textContent = "3D\nNo task_id returned.";
+    if (hintEl) hintEl.textContent = "";
+    return;
+  }
+
+  if (statusEl) statusEl.textContent = `3D\nrunning\ntask_id: ${taskId}`;
+  if (hintEl) hintEl.textContent = "Polling…";
+
+  while (true) {
+    await sleep(2000);
+
+    let rr, st;
+    try {
+      rr = await fetch(`/api/tripo/status/${encodeURIComponent(taskId)}`, { cache: "no-store" });
+      st = await rr.json();
+    } catch {
+      if (statusEl) statusEl.textContent = `3D\nError: failed to poll status\ntask_id: ${taskId}`.trim();
+      if (hintEl) hintEl.textContent = "";
+      return;
+    }
+
+    if (!rr.ok) {
+      if (statusEl) statusEl.textContent = `3D\nError: ${st && st.error ? st.error : "unknown"}\ntask_id: ${taskId}`.trim();
+      if (hintEl) hintEl.textContent = "";
+      return;
+    }
+
+    const status = String(st.status || "").toLowerCase();
+    const progress = (st.progress != null) ? Number(st.progress) : null;
+
+    if (status === "failed" || status === "error") {
+      if (statusEl) statusEl.textContent = `3D\nFAILED\ntask_id: ${taskId}`.trim();
+      if (hintEl) hintEl.textContent = "";
+      return;
+    }
+
+    if (status === "success" || status === "succeeded" || status === "done") {
+      const out = st.output || {};
+      const glb = out.pbr_model || out.model || out.base_model || "";
+      if (!glb) {
+        if (statusEl) statusEl.textContent = `3D\nREADY (no model url)\ntask_id: ${taskId}`.trim();
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      const remoteUrl = String(glb || "");
+
+      if (statusEl) statusEl.textContent = `3D\nDownloading…\ntask_id: ${taskId}`.trim();
+      if (hintEl) hintEl.textContent = "Saving GLB to /models and caching locally…";
+
+      let localUrl = "";
+      try {
+        const dr = await fetch(`/api/tripo/download/${encodeURIComponent(taskId)}?url=${encodeURIComponent(remoteUrl)}`, { cache: "no-store" });
+        const dd = await dr.json();
+        if (!dr.ok) {
+          if (statusEl) statusEl.textContent = `3D\nError: ${dd && dd.error ? dd.error : "download failed"}\ntask_id: ${taskId}`.trim();
+          if (hintEl) hintEl.textContent = "";
+          return;
+        }
+        localUrl = dd && dd.url ? String(dd.url) : "";
+      } catch {
+        if (statusEl) statusEl.textContent = `3D\nError: download failed\ntask_id: ${taskId}`.trim();
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      if (!localUrl) {
+        if (statusEl) statusEl.textContent = `3D\nError: missing local url\ntask_id: ${taskId}`.trim();
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      let blob = null;
+      try {
+        blob = await fetchAsBlob(localUrl);
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `3D\nError: failed to fetch model blob\ntask_id: ${taskId}`.trim();
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      const modelKey = `tripo:${taskId}:${Date.now()}`;
+      try { await idbPutModelBlob(modelKey, blob); } catch {}
+
+      revokeLastModelObjectUrl();
+      _lastModelIdbKey = modelKey;
+      _lastModelObjectUrl = URL.createObjectURL(blob);
+      _lastModelMeta = `task_id: ${taskId}\nmodel_version: ${model_version || "(default)"}\ncompress: ${compress ? "true" : "false"}\nlocal_url: ${localUrl}`;
+
+      if (statusEl) statusEl.textContent = `3D\nREADY\ntask_id: ${taskId}\nurl: ${localUrl}`.trim();
+      if (hintEl) hintEl.textContent = "Opening 3D preview…";
+
+      await openModelOverlay(_lastModelObjectUrl, _lastModelMeta);
+
+      if (hintEl) hintEl.textContent = "";
+      return;
+    }
+
+    const progTxt = (progress == null || !Number.isFinite(progress)) ? "" : ` • ${progress}%`;
+    if (statusEl) statusEl.textContent = `3D\n${status}${progTxt}\ntask_id: ${taskId}`.trim();
+  }
+}
+
+
+
 
 
 /* Boots the single Generate view, wires UI events, and runs generation/polling + cooldown. */
@@ -2000,6 +2241,7 @@ function boot() {
     selectedVideoIds: [],
     useCapturedFrame: false,
     uploadPreviewUrl: null,
+    tripoOptions: null,
   };
 
   const promptEl = $("#prompt");
@@ -2023,6 +2265,7 @@ function boot() {
   const btnCaptureFrame = $("#btn-capture-frame");
   const btnUpscaleFrame = $("#btn-upscale-frame");
   const btnEnhanceFrame = $("#btn-enhance-frame");
+  const btn3D = $("#btn-3d");
   const btnClearFrame = $("#btn-clear-frame");
   const btnDownloadFrame = $("#btn-download-frame");
 
@@ -2034,10 +2277,182 @@ function boot() {
   const btnGenerate = $("#btn-generate");
   const btnRestyle = $("#btn-restyle");
 
+  const btnShelfMode = $("#btnShelfMode");
+  const btnTheme = document.getElementById("btnTheme");
+  const btnPlayerSize = document.getElementById("btnPlayerSize");
+
   const framePreviewEl = document.getElementById("framePreview");
   const imgOverlayEl = document.getElementById("imgOverlay");
   const imgOverlayImgEl = document.getElementById("imgOverlayImg");
   const imgOverlayCloseEl = document.getElementById("imgOverlayClose");
+
+  const modelOverlayEl = document.getElementById("modelOverlay");
+  const modelOverlayStageEl = document.getElementById("modelOverlayStage");
+  const modelOverlayCloseEl = document.getElementById("modelOverlayClose");
+
+  const shelfEl = document.getElementById("videoShelf");
+  const playerWrapEl = document.getElementById("playerWrap");
+
+  const tripoModelVersionEl = document.getElementById("tripo_model_version");
+  const tripoTextureQualityEl = document.getElementById("tripo_texture_quality");
+  const tripoOrientationEl = document.getElementById("tripo_orientation");
+  const tripoAutoSizeEl = document.getElementById("tripo_auto_size");
+  const tripoCompressEl = document.getElementById("tripo_compress");
+
+  const SHELF_MODE_KEY = "aigen_shelf_mode_v1";
+  const THEME_KEY = "aigen_theme_v1";
+  const PLAYER_SIZE_KEY = "grok_player_size_v1";
+
+  const shelfModes = ["s", "m", "l"];
+  const shelfModeLabels = { s: "S", m: "M", l: "L" };
+
+  const themes = ["sun", "dark", "custom"];
+  const themeLabels = { sun: "Sun", dark: "Dark", custom: "Custom" };
+
+  const playerSizes = ["s", "m", "l"];
+  const playerSizeLabels = { s: "S", m: "M", l: "L" };
+
+  /* Applies a persisted shelf sizing mode by toggling a class on #videoShelf. */
+  function applyShelfMode(mode) {
+    const m = shelfModes.includes(mode) ? mode : "m";
+    if (shelfEl) {
+      for (const x of shelfModes) shelfEl.classList.remove(`shelf--${x}`);
+      shelfEl.classList.add(`shelf--${m}`);
+    }
+    if (btnShelfMode) btnShelfMode.textContent = `Shelf: ${shelfModeLabels[m] || m}`;
+    try { localStorage.setItem(SHELF_MODE_KEY, m); } catch {}
+  }
+
+  /* Applies a persisted theme by toggling a class on <body>. */
+  function applyTheme(theme) {
+    const t = themes.includes(theme) ? theme : "sun";
+    document.body.classList.remove("theme--sun", "theme--dark", "theme--custom");
+    document.body.classList.add(`theme--${t}`);
+    if (btnTheme) btnTheme.textContent = `Theme: ${themeLabels[t] || t}`;
+    try { localStorage.setItem(THEME_KEY, t); } catch {}
+  }
+
+  /* Applies a persisted player size by toggling a class on #playerWrap. */
+  function applyPlayerSize(size) {
+    const s = playerSizes.includes(size) ? size : "m";
+    if (playerWrapEl) {
+      playerWrapEl.classList.remove("player--s", "player--m", "player--l");
+      playerWrapEl.classList.add(`player--${s}`);
+    }
+    if (btnPlayerSize) btnPlayerSize.textContent = `Player: ${playerSizeLabels[s] || s}`;
+    try { localStorage.setItem(PLAYER_SIZE_KEY, s); } catch {}
+  }
+
+  let savedShelfMode = "m";
+  try {
+    const v = localStorage.getItem(SHELF_MODE_KEY);
+    if (shelfModes.includes(v)) savedShelfMode = v;
+  } catch {}
+  applyShelfMode(savedShelfMode);
+
+  let savedTheme = "sun";
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (themes.includes(v)) savedTheme = v;
+  } catch {}
+  applyTheme(savedTheme);
+
+  let savedPlayerSize = "m";
+  try {
+    const v = localStorage.getItem(PLAYER_SIZE_KEY);
+    if (playerSizes.includes(v)) savedPlayerSize = v;
+  } catch {}
+  applyPlayerSize(savedPlayerSize);
+
+  if (btnShelfMode) {
+    btnShelfMode.addEventListener("click", () => {
+      let cur = "m";
+      try {
+        const v = localStorage.getItem(SHELF_MODE_KEY);
+        if (shelfModes.includes(v)) cur = v;
+      } catch {}
+      const idx = shelfModes.indexOf(cur);
+      const next = shelfModes[(idx + 1) % shelfModes.length];
+      applyShelfMode(next);
+    });
+  }
+
+  if (btnTheme) {
+    btnTheme.addEventListener("click", () => {
+      let cur = "sun";
+      try {
+        const v = localStorage.getItem(THEME_KEY);
+        if (themes.includes(v)) cur = v;
+      } catch {}
+      const idx = themes.indexOf(cur);
+      const next = themes[(idx + 1) % themes.length];
+      applyTheme(next);
+    });
+  }
+
+  if (btnPlayerSize) {
+    btnPlayerSize.addEventListener("click", () => {
+      let cur = "m";
+      try {
+        const v = localStorage.getItem(PLAYER_SIZE_KEY);
+        if (playerSizes.includes(v)) cur = v;
+      } catch {}
+      const idx = playerSizes.indexOf(cur);
+      const next = playerSizes[(idx + 1) % playerSizes.length];
+      applyPlayerSize(next);
+    });
+  }
+
+  (async () => {
+    if (!tripoModelVersionEl && !tripoTextureQualityEl && !tripoOrientationEl && !tripoAutoSizeEl && !tripoCompressEl) return;
+
+    try {
+      const r = await fetch("/api/tripo/options", { cache: "no-store" });
+      const data = await r.json();
+      if (!r.ok) return;
+
+      state.tripoOptions = data;
+
+      const enums = data && data.enums ? data.enums : {};
+      const defaults = data && data.defaults ? data.defaults : {};
+
+      const list = Array.isArray(enums.model_version) ? enums.model_version : [];
+
+      let effectiveModelVersion = String(defaults.model_version || "");
+      if (!effectiveModelVersion) {
+        const preferV3 = list.find(v => v && /^v3\./.test(String(v).trim()));
+        if (preferV3) effectiveModelVersion = String(preferV3).trim();
+      }
+      if (!effectiveModelVersion) {
+        const preferV = list.find(v => v && /^v\d+\./.test(String(v).trim()));
+        if (preferV) effectiveModelVersion = String(preferV).trim();
+      }
+      if (!effectiveModelVersion) {
+        const firstNonEmpty = list.find(v => v && String(v).trim());
+        if (firstNonEmpty) effectiveModelVersion = String(firstNonEmpty).trim();
+      }
+
+      if (tripoModelVersionEl) {
+        tripoModelVersionEl.innerHTML = "";
+        for (const v of list) {
+          const opt = document.createElement("option");
+          opt.value = String(v || "");
+          opt.textContent = v ? String(v) : "(default)";
+          tripoModelVersionEl.appendChild(opt);
+        }
+        tripoModelVersionEl.value = effectiveModelVersion || "";
+      }
+
+      if (state.tripoOptions && state.tripoOptions.defaults && effectiveModelVersion) {
+        state.tripoOptions.defaults.model_version = effectiveModelVersion;
+      }
+
+      if (tripoTextureQualityEl) tripoTextureQualityEl.value = String(defaults.texture_quality || tripoTextureQualityEl.value || "standard");
+      if (tripoOrientationEl) tripoOrientationEl.value = String(defaults.orientation || tripoOrientationEl.value || "default");
+      if (tripoAutoSizeEl) tripoAutoSizeEl.checked = !!defaults.auto_size;
+      if (tripoCompressEl) tripoCompressEl.checked = !!defaults.compress;
+    } catch {}
+  })();
 
   if (imageEl) {
     imageEl.addEventListener("change", () => {
@@ -2047,18 +2462,34 @@ function boot() {
     });
   }
 
-if (framePreviewEl) {
-  framePreviewEl.addEventListener("click", () => {
-    const src = framePreviewEl.getAttribute("src") || "";
-    if (!src) return;
-    openImageOverlay(src, state);
-  });
-}
+  if (framePreviewEl) {
+    framePreviewEl.addEventListener("click", () => {
+      const src = framePreviewEl.getAttribute("src") || "";
+      if (!src) return;
+      openImageOverlay(src, state);
+    });
+  }
 
   if (imgOverlayCloseEl) imgOverlayCloseEl.onclick = () => closeImageOverlay();
   if (imgOverlayEl) {
     imgOverlayEl.addEventListener("click", (e) => {
       if (e.target === imgOverlayEl) closeImageOverlay();
+    });
+  }
+
+  // 3D overlay close handlers
+  if (modelOverlayCloseEl) modelOverlayCloseEl.onclick = () => closeModelOverlay();
+  if (modelOverlayEl) {
+    modelOverlayEl.addEventListener("click", (e) => {
+      if (e.target === modelOverlayEl) closeModelOverlay();
+    });
+  }
+  if (modelOverlayStageEl) {
+    modelOverlayStageEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeModelOverlay();
+      }
     });
   }
 
@@ -2091,7 +2522,7 @@ if (framePreviewEl) {
   }
 
   function refreshJobsStatuses() {
-    const jobs = loadJobs().slice(0, 20);
+    const jobs = loadJobs().slice(0, 15);
     for (const j of jobs) {
       if (!j || !j.request_id) continue;
       if (j.status === "done" && j.url) continue;
@@ -2107,28 +2538,10 @@ if (framePreviewEl) {
     }
   }
 
-  async function readImageAspectRatio(fileOrBlob) {
-    return await new Promise((resolve) => {
-      const img = new Image();
-      const url = URL.createObjectURL(fileOrBlob);
-      img.onload = () => {
-        const w = img.naturalWidth || 0;
-        const h = img.naturalHeight || 0;
-        try { URL.revokeObjectURL(url); } catch {}
-        resolve({ w, h });
-      };
-      img.onerror = () => {
-        try { URL.revokeObjectURL(url); } catch {}
-        resolve({ w: 0, h: 0 });
-      };
-      img.src = url;
-    });
-  }
-
   renderJobsList(selectJob);
-  renderVideoShelf(state);
   updateFrameUI(state);
   renderFrameHistory(state);
+  renderVideoShelf(state);
 
   if (btnHistory) btnHistory.onclick = () => { renderJobsList(selectJob); openDrawer(); };
   if (btnDrawerClose) btnDrawerClose.onclick = () => closeDrawer();
@@ -2136,20 +2549,17 @@ if (framePreviewEl) {
 
   if (btnRefreshJobs) btnRefreshJobs.onclick = () => refreshJobsStatuses();
 
-  if (btnClearJobs) btnClearJobs.onclick = () => {
+  if (btnClearJobs) btnClearJobs.onclick = async () => {
     saveJobs([]);
+    try { await idbClearAllFrames(); } catch {}
+    try { await idbClearAllModels(); } catch {}
     renderJobsList(selectJob);
-    renderVideoShelf(state);
     state.activeJobId = null;
-    state.selectedVideoIds = [];
     renderFrameHistory(state);
     statusEl.textContent = "Idle.";
     resultEl.innerHTML = "";
     hintEl.textContent = "";
     resetPlayer();
-    clearCapturedFrame(state);
-    state.useCapturedFrame = false;
-    updateFrameUI(state);
   };
 
   if (btnClearStatus) btnClearStatus.onclick = () => {
@@ -2165,9 +2575,6 @@ if (framePreviewEl) {
     hintEl.textContent = "Capturing frame…";
 
     const frame = await captureFrameFromPlayer(state);
-    state.useCapturedFrame = true;
-
-    if (imageEl) imageEl.value = "";
     updateFrameUI(state);
 
     if (!frame) {
@@ -2175,22 +2582,56 @@ if (framePreviewEl) {
       return;
     }
 
+    if (imageEl) imageEl.value = "";
+    state.useCapturedFrame = true;
+
     const saved = saveCapturedFrameToJob(state);
     renderFrameHistory(state);
 
-    hintEl.textContent = saved
-      ? `Frame captured + saved: ${frame.width}×${frame.height} @ t=${frame.time.toFixed(3)}s`
-      : `Frame captured: ${frame.width}×${frame.height} @ t=${frame.time.toFixed(3)}s (select a job to save)`;
+    hintEl.textContent = saved ? "Frame saved to job." : "Frame captured.";
   };
 
   if (btnUpscaleFrame) btnUpscaleFrame.onclick = async () => {
     await upscaleCapturedFrame(state, statusEl, hintEl);
-    updateFrameUI(state);
   };
 
   if (btnEnhanceFrame) btnEnhanceFrame.onclick = async () => {
     await enhanceCapturedFrame(state, statusEl, hintEl);
+  };
+
+  // 3D: run Tripo and open Three.js preview overlay when ready.
+  const glbPicker = btn3D ? wireLocalGlbTestButton(btn3D, statusEl, hintEl) : null;
+
+  if (btn3D) btn3D.onclick = async (e) => {
+    const ev = e || window.event || {};
+    const shift = !!ev.shiftKey;
+    const alt = !!ev.altKey;
+
+    if (shift) {
+      if (glbPicker && typeof glbPicker.openPicker === "function") glbPicker.openPicker();
+      return;
+    }
+
+    if (alt) {
+      if (typeof _lastModelObjectUrl === "string" && _lastModelObjectUrl) {
+        await openModelOverlay(_lastModelObjectUrl, (typeof _lastModelMeta === "string" && _lastModelMeta) ? _lastModelMeta : "cached model");
+      } else {
+        hintEl.textContent = "No cached model yet.";
+      }
+      return;
+    }
+
+    await tripoImageTo3D(state, statusEl, hintEl);
+  };
+
+  if (btnDownloadFrame) btnDownloadFrame.onclick = () => {
+    downloadCapturedFrame(state);
+  };
+
+  if (btnClearFrame) btnClearFrame.onclick = () => {
+    clearCapturedFrame(state);
     updateFrameUI(state);
+    hintEl.textContent = "";
   };
 
   if (btnRestyle) btnRestyle.onclick = async () => {
@@ -2198,101 +2639,30 @@ if (framePreviewEl) {
     updateFrameUI(state);
   };
 
-  if (btnDownloadFrame) btnDownloadFrame.onclick = () => {
-    if (!state.capturedFrame || !state.capturedFrame.blob) {
-      hintEl.textContent = "No frame to download.";
-      return;
-    }
-    const name = `frame_${state.activeJobId || "nojob"}_t${(typeof state.capturedFrame.time === "number" ? state.capturedFrame.time.toFixed(3) : "na")}.png`;
-    downloadBlobAsFile(state.capturedFrame.blob, name);
-  };
-
-  if (btnClearFrame) btnClearFrame.onclick = () => {
-    clearCapturedFrame(state);
-    updateFrameUI(state);
-    hintEl.textContent = "Frame cleared.";
-  };
-
-  $("#btn-clear").addEventListener("click", () => {
-    promptEl.value = "";
-    if (imageEl) imageEl.value = "";
-    statusEl.textContent = "Idle.";
-    resultEl.innerHTML = "";
-    hintEl.textContent = "";
-    resetPlayer();
-    clearCapturedFrame(state);
-    state.useCapturedFrame = false;
-    if (state.uploadPreviewUrl) {
-      try { URL.revokeObjectURL(state.uploadPreviewUrl); } catch {}
-      state.uploadPreviewUrl = null;
-    }
-    updateFrameUI(state);
-  });
-
-  tickCooldown(badgeEl, btnGenerate);
-  setInterval(() => tickCooldown(badgeEl, btnGenerate), 250);
-
-  $("#btn-generate").addEventListener("click", async () => {
-    if (tickCooldown(badgeEl, btnGenerate)) {
-      hintEl.textContent = "Cooldown active. Wait before starting a new request.";
-      return;
-    }
-
-    resultEl.innerHTML = "";
-    hintEl.textContent = "";
-    resetPlayer();
-
-    const prompt = promptEl.value.trim();
+  if (btnGenerate) btnGenerate.addEventListener("click", async () => {
+    const prompt = (promptEl && promptEl.value ? String(promptEl.value) : "").trim();
     if (!prompt) {
-      statusEl.textContent = "Please enter a prompt.";
+      hintEl.textContent = "Enter a prompt first.";
       return;
     }
 
     const form = new FormData();
     form.append("prompt", prompt);
-    form.append("duration", String(parseInt(durationEl.value, 10) || 8));
-    form.append("resolution", resEl.value);
+    form.append("duration", durationEl ? String(durationEl.value || "8") : "8");
+    form.append("resolution", resEl ? String(resEl.value || "480p") : "480p");
 
-    const file = imageEl.files && imageEl.files[0];
     let sourceImageBlob = null;
 
-    if (file && !state.useCapturedFrame) {
-      sourceImageBlob = file;
-      form.append("image", file);
-    } else if (state.capturedFrame && state.capturedFrame.blob) {
+    if (state.useCapturedFrame && state.capturedFrame && state.capturedFrame.blob) {
       sourceImageBlob = state.capturedFrame.blob;
-      const f = new File([state.capturedFrame.blob], "frame.png", { type: "image/png" });
-      form.append("image", f);
+    } else if (imageEl && imageEl.files && imageEl.files[0]) {
+      sourceImageBlob = imageEl.files[0];
     }
 
     if (sourceImageBlob) {
-      const { w, h } = await readImageAspectRatio(sourceImageBlob);
-      if (w && h) {
-        const ratio = w / h;
-        const candidates = [
-          { v: "1:1", r: 1 },
-          { v: "16:9", r: 16 / 9 },
-          { v: "9:16", r: 9 / 16 },
-          { v: "4:3", r: 4 / 3 },
-          { v: "3:4", r: 3 / 4 },
-          { v: "3:2", r: 3 / 2 },
-          { v: "2:3", r: 2 / 3 },
-        ];
-        let best = candidates[0];
-        let bestDiff = Math.abs(ratio - best.r);
-        for (const c of candidates) {
-          const d = Math.abs(ratio - c.r);
-          if (d < bestDiff) {
-            best = c;
-            bestDiff = d;
-          }
-        }
-        form.append("aspect_ratio", best.v);
-      } else {
-        form.append("aspect_ratio", aspectEl.value);
-      }
+      form.append("image", sourceImageBlob, "input.png");
     } else {
-      form.append("aspect_ratio", aspectEl.value);
+      form.append("aspect_ratio", aspectEl ? String(aspectEl.value || "16:9") : "16:9");
     }
 
     statusEl.textContent = "Starting…";
@@ -2302,7 +2672,10 @@ if (framePreviewEl) {
     const startData = await startResp.json();
 
     if (!startResp.ok) {
-      const ra = (startData && startData.retry_after) ? parseInt(startData.retry_after, 10) || 0 : (parseInt(startResp.headers.get("Retry-After") || "0", 10) || 0);
+      const ra = (startData && startData.retry_after)
+        ? parseInt(startData.retry_after, 10) || 0
+        : (parseInt(startResp.headers.get("Retry-After") || "0", 10) || 0);
+
       statusEl.textContent = `Error: ${startData.error || "unknown"}\nreq_id: ${startData.req_id || ""}`.trim();
       hintEl.textContent = startResp.status === 429 ? `Rate-limited. Wait ~${ra || 60}s and try again.` : "";
       if (startResp.status === 429) setCooldown(Math.max(10, ra || 60), badgeEl, btnGenerate, hintEl);
@@ -2328,10 +2701,166 @@ if (framePreviewEl) {
 
     statusEl.textContent = `Started.\nrequest_id: ${requestId}`;
     await poll(requestId, statusEl, resultEl, { loadPlayer: true });
+
     hintEl.textContent = "";
     renderJobsList(selectJob);
     renderVideoShelf(state);
   });
+}
+
+
+
+
+
+
+/* Submits current input image (captured or uploaded) to Tripo3D Image-to-Model and polls until finished. */
+async function tripo3dOp(state, statusEl, hintEl) {
+  const imageEl = document.getElementById("image");
+
+  let sourceImageBlob = null;
+  if (state.useCapturedFrame && state.capturedFrame && state.capturedFrame.blob) {
+    sourceImageBlob = state.capturedFrame.blob;
+  } else if (imageEl && imageEl.files && imageEl.files[0]) {
+    sourceImageBlob = imageEl.files[0];
+  }
+
+  if (!sourceImageBlob) {
+    if (hintEl) hintEl.textContent = "No input image selected (upload or capture a frame).";
+    return;
+  }
+
+  const form = new FormData();
+  form.append("image", sourceImageBlob, "input.png");
+
+  if (statusEl) statusEl.textContent = "3D\nStarting…";
+  if (hintEl) hintEl.textContent = "3D: sending image to Tripo…";
+
+  let r, d;
+  try {
+    r = await fetch("/api/tripo/start", { method: "POST", body: form });
+    d = await r.json();
+  } catch {
+    if (statusEl) statusEl.textContent = "3D\nFailed (network/error).";
+    if (hintEl) hintEl.textContent = "";
+    return;
+  }
+
+  if (!r.ok) {
+    if (statusEl) statusEl.textContent = `3D\nError: ${d && d.error ? d.error : "unknown"}`.trim();
+    if (hintEl) hintEl.textContent = "";
+    return;
+  }
+
+  const taskId = d.task_id || "";
+  if (!taskId) {
+    if (statusEl) statusEl.textContent = "3D\nError: missing task_id.";
+    if (hintEl) hintEl.textContent = "";
+    return;
+  }
+
+  if (statusEl) statusEl.textContent = `3D\nStarted\ntask_id: ${taskId}`;
+  if (hintEl) hintEl.textContent = "3D: polling…";
+
+  await pollTripo3dTask(taskId, statusEl, hintEl);
+}
+
+/* Polls Tripo3D task status and prints model URLs when ready. */
+async function pollTripo3dTask(taskId, statusEl, hintEl) {
+  const startedAt = Date.now();
+  const timeoutMs = 15 * 60 * 1000;
+
+  while (true) {
+    if (Date.now() - startedAt > timeoutMs) {
+      if (statusEl) statusEl.textContent = `3D\nTimeout\ntask_id: ${taskId}`;
+      if (hintEl) hintEl.textContent = "";
+      return;
+    }
+
+    let r, d;
+    try {
+      r = await fetch(`/api/tripo/status/${encodeURIComponent(taskId)}`, { cache: "no-store" });
+      d = await r.json();
+    } catch {
+      await sleep(2500);
+      continue;
+    }
+
+    if (!r.ok) {
+      if (statusEl) statusEl.textContent = `3D\nStatus error\ntask_id: ${taskId}`;
+      if (hintEl) hintEl.textContent = d && d.error ? d.error : "";
+      return;
+    }
+
+    const st = String(d.status || "unknown").toLowerCase();
+    const prog = (d.progress == null) ? "" : ` • ${d.progress}%`;
+
+    if (statusEl) statusEl.textContent = `3D\n${st}${prog}\ntask_id: ${taskId}`;
+
+    if (st === "success" || st === "succeeded" || st === "done") {
+      const out = d.output || {};
+      const lines = [];
+      if (out.model) lines.push(`model: ${out.model}`);
+      if (out.base_model) lines.push(`base_model: ${out.base_model}`);
+      if (out.pbr_model) lines.push(`pbr_model: ${out.pbr_model}`);
+      if (out.rendered_image) lines.push(`rendered_image: ${out.rendered_image}`);
+
+      if (statusEl) statusEl.textContent = `3D\nREADY\ntask_id: ${taskId}\n${lines.join("\n")}`.trim();
+      if (hintEl) hintEl.textContent = "3D: ready (URLs in status).";
+      return;
+    }
+
+    if (st === "failed" || st === "error") {
+      if (hintEl) hintEl.textContent = d && d.error ? d.error : "";
+      return;
+    }
+
+    await sleep(2500);
+  }
+}
+
+
+function wireLocalGlbTestButton(btn3D, statusEl, hintEl) {
+  /* Enables picking a local .glb file and previewing it in the 3D overlay (no Tripo call). */
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".glb,model/gltf-binary";
+  input.style.display = "none";
+  document.body.appendChild(input);
+
+  let lastLocalObjectUrl = "";
+
+  const revokeLast = () => {
+    if (lastLocalObjectUrl) {
+      try { URL.revokeObjectURL(lastLocalObjectUrl); } catch {}
+      lastLocalObjectUrl = "";
+    }
+  };
+
+  const openPicker = () => {
+    try { input.click(); } catch {}
+  };
+
+  input.addEventListener("change", async () => {
+    const f = input.files && input.files[0] ? input.files[0] : null;
+    input.value = "";
+    if (!f) return;
+
+    revokeLast();
+    const url = URL.createObjectURL(f);
+    lastLocalObjectUrl = url;
+
+    try {
+      if (statusEl) statusEl.textContent = `3D\nLOCAL GLB\n${f.name}`;
+      if (hintEl) hintEl.textContent = "Opening local GLB…";
+      await openModelOverlay(url, `local: ${f.name}`);
+      if (hintEl) hintEl.textContent = "";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = `3D\nLOCAL GLB ERROR\n${String(e && e.message ? e.message : e)}`;
+      if (hintEl) hintEl.textContent = "";
+    }
+  });
+
+  return { openPicker };
 }
 
 

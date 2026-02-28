@@ -5,6 +5,8 @@
   <title>Grok Video Generator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/static/styles.css" />
+
+
 </head>
 <body>
 
@@ -16,8 +18,10 @@
 
     <div class="topActions">
       <div id="cooldownBadge" class="cooldownBadge" aria-hidden="true">Ready</div>
+      <button id="btnTheme" class="btn tiny ghost" type="button" title="Change theme">Theme: Sun</button>
       <button id="topHistory" class="btn tiny ghost">History</button>
     </div>
+
   </header>
 
   <main class="container">
@@ -27,10 +31,15 @@
 
 
   <template id="tpl-generate">
+
     <section class="shell">
       <div class="leftCol">
         <div class="leftStack">
           <div class="panel compact">
+
+
+
+
             <div class="panelHead">
               <div class="label">Settings</div>
             </div>
@@ -68,6 +77,46 @@
               </div>
             </details>
 
+
+            <details class="details">
+              <summary class="summary">3D (Tripo)</summary>
+
+              <div class="grid2">
+                <div>
+                  <label class="label">Model version</label>
+                  <select id="tripo_model_version" class="select"></select>
+                </div>
+
+                <div>
+                  <label class="label">Texture quality</label>
+                  <select id="tripo_texture_quality" class="select">
+                    <option value="standard">standard</option>
+                    <option value="detailed">detailed</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="label">Orientation</label>
+                  <select id="tripo_orientation" class="select">
+                    <option value="default">default</option>
+                    <option value="align_image">align_image</option>
+                  </select>
+                </div>
+
+                <div class="row" style="align-items:center; gap:10px;">
+                  <label class="label" style="margin:0;">Auto size (meters)</label>
+                  <input id="tripo_auto_size" type="checkbox" />
+                </div>
+
+                <div class="row" style="align-items:center; gap:10px;">
+                  <label class="label" style="margin:0;">Compress</label>
+                  <input id="tripo_compress" type="checkbox" />
+                </div>
+              </div>
+            </details>
+
+
+
             <details class="details">
               <summary class="summary">Frame</summary>
 
@@ -75,6 +124,7 @@
                 <button id="btn-capture-frame" class="btn tiny ghost">Capture</button>
                 <button id="btn-upscale-frame" class="btn tiny ghost">Upscale</button>
                 <button id="btn-enhance-frame" class="btn tiny ghost">Enhance</button>
+                <button id="btn-3d" class="btn tiny ghost" type="button">3D</button>
                 <button id="btn-download-frame" class="btn tiny ghost">Download</button>
                 <button id="btn-clear-frame" class="btn tiny ghost">Clear</button>
               </div>
@@ -84,6 +134,9 @@
                 <div id="frameMeta" class="muted small"></div>
               </div>
             </details>
+
+
+
 
             <details class="details">
               <summary class="summary">Saved frames (selected job)</summary>
@@ -109,7 +162,11 @@
 
       <div class="rightCol">
         <div class="stickyStack">
+
           <div id="playerWrap" class="playerWrap" style="display:none;">
+            <div class="playerWrapTop">
+              <button id="btnPlayerSize" class="btn tiny ghost" type="button" title="Change player height">Player: M</button>
+            </div>
             <video id="player" controls playsinline preload="metadata" class="player"></video>
           </div>
 
@@ -127,11 +184,15 @@
       </div>
 
       <div class="panel compact fullBleed">
+
         <div class="panelHead">
           <div class="label">Videos</div>
-          <div class="panelHeadRight">
+          
+          <div class="panelHeadRight shelfControls">
+            <button id="btnShelfMode" class="btn tiny ghost" type="button" title="Change shelf size">Shelf: M</button>
             <button id="btn-join" class="btn tiny ghost">Join selected</button>
           </div>
+
         </div>
 
         <div class="audioRow">
@@ -167,19 +228,33 @@
             <div class="label">Frame preview</div>
             <div class="imgOverlayTopRight">
               <div class="muted small">Drag to select • Click outside selection to clear • Enter to crop</div>
-              <button id="imgOverlayClose" class="btn tiny ghost">Close</button>
+              <button id="imgOverlayClose" class="btn tiny ghost" type="button">Close</button>
             </div>
           </div>
-
-          <div id="imgOverlayStage" class="imgOverlayStage" tabindex="0" aria-label="Image crop stage">
-            <img id="imgOverlayImg" class="imgOverlayImg" alt="Full size frame preview" />
+          <div id="imgOverlayStage" class="imgOverlayStage" tabindex="0">
+            <img id="imgOverlayImg" class="imgOverlayImg" alt="Frame preview" />
             <div id="cropShade" class="cropShade" aria-hidden="true"></div>
             <div id="cropBox" class="cropBox" aria-hidden="true"></div>
           </div>
         </div>
       </div>
 
-      
+      <div id="modelOverlay" class="modelOverlay" aria-hidden="true">
+        <div class="modelOverlayPanel">
+          <div class="modelOverlayTop">
+            <div class="label">3D preview</div>
+            <div class="row tight">
+              <button id="modelOverlayClose" class="btn tiny ghost" type="button">Close</button>
+            </div>
+          </div>
+          <div id="modelOverlayStage" class="modelOverlayStage" tabindex="0">
+            <canvas id="modelCanvas" class="modelCanvas"></canvas>
+            <div id="modelOverlayMeta" class="modelOverlayMeta muted small"></div>
+          </div>
+        </div>
+      </div>
+
+
     </section>
   </template>
 
@@ -188,6 +263,15 @@
 
 
 
-  <script src="/static/app.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>
