@@ -8,15 +8,15 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 .title { font-weight:800; letter-spacing:0.2px; }
 .topActions { display:flex; gap:8px; align-items:center; }
 
-.cooldownBadge { font-size: 12px; padding: 6px 10px; border-radius: 999px; border:1px solid var(--border); background:#fff; color:#111; }
+.cooldownBadge { font-size: 12px; padding: 6px 10px; border-radius: 999px; border:0px solid var(--border); background:#fff; color:#111; }
 .cooldownBadge.cooling { background:#fff7e6; }
 .cooldownBadge.hidden { display:none; }
 
 .container { max-width: none; margin: 10px 0; padding: 0 10px; }
 
-.btn { border:1px solid #111; background:#111; color:#fff; padding:10px 14px; border-radius:12px; cursor:pointer; }
+.btn { border:0px solid #111; background:#111; color:#fff; padding:10px 14px; border-radius:12px; cursor:pointer; }
 .btn:hover { filter: brightness(0.95); }
-.btn.ghost { background:#fff; color:#111; border:1px solid var(--border); }
+.btn.ghost { background:#fff; color:#111; border:0px solid var(--border); }
 .btn.tiny { padding:6px 10px; border-radius:10px; font-size: 0.92em; }
 .btn:disabled { opacity: 0.6; cursor:not-allowed; }
 
@@ -32,19 +32,19 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 .leftStack { display:flex; flex-direction:column; gap:10px; }
 .promptDock { margin-top:auto; }
 
-.panel { border:1px solid var(--border); border-radius:16px; padding:12px; background:var(--card); box-shadow: 0 1px 8px rgba(0,0,0,0.04); }
+.panel { border:0px solid var(--border); border-radius:16px; padding:12px; background:var(--card); box-shadow: 0 1px 8px rgba(0,0,0,0.04); }
 .panel.compact { padding:10px; }
 .panelHead { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 8px; }
 .panelHeadRight { display:flex; gap:8px; align-items:center; }
 
-.details { border:1px solid var(--border); border-radius:14px; padding:10px; background:#fff; margin-top: 10px; }
+.details { border:0px solid var(--border); border-radius:14px; padding:10px; background:#fff; margin-top: 10px; }
 .summary { cursor:pointer; font-weight:700; }
 
 .grid2 { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; margin-top: 10px; }
 @media (max-width: 760px){ .grid2 { grid-template-columns: 1fr; } }
 
-.input, .select { width:100%; padding: 9px 10px; border:1px solid var(--border); border-radius:12px; margin-top:6px; background:#fff; }
-.textarea { width:100%; min-height: 120px; padding:10px; border:1px solid var(--border); border-radius:12px; margin-top:8px; resize: vertical; }
+.input, .select { width:100%; padding: 9px 10px; border:0px solid var(--border); border-radius:12px; margin-top:6px; background:#fff; }
+.textarea { width:100%; min-height: 120px; padding:10px; border:0px solid var(--border); border-radius:12px; margin-top:8px; resize: vertical; }
 
 .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top: 10px; }
 .row.tight { margin-top: 8px; }
@@ -53,7 +53,7 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 
 .playerWrap{
   position:relative;
-  border:1px solid var(--border);
+  border:0px solid var(--border);
   border-radius:16px;
   background:var(--card);
   overflow:hidden;
@@ -95,7 +95,7 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 .drawerControls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
 
 .jobsList { display:flex; flex-direction:column; gap:10px; }
-.jobItem { text-align:left; border:1px solid var(--border); background:#fff; border-radius:14px; padding:12px; cursor:pointer; }
+.jobItem { text-align:left; border:0px solid var(--border); background:#fff; border-radius:14px; padding:12px; cursor:pointer; }
 .jobItem:hover { background:#fafafa; }
 .jobItemTop { display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .jobItemId { font-weight: 800; }
@@ -103,18 +103,18 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 .jobItemPrompt { margin-top: 8px; }
 .jobItemUrl { margin-top: 8px; word-break: break-all; }
 
-.pill { font-size: 0.82em; padding: 4px 8px; border-radius: 999px; border:1px solid var(--border); }
+.pill { font-size: 0.82em; padding: 4px 8px; border-radius: 999px; border:0px solid var(--border); }
 .pill.pending { background:#fff7e6; }
 .pill.done { background:#e9fbe9; }
 .pill.expired { background:#ffe8e8; }
 .pill.unknown { background:#f3f3f3; }
 
 .framePreviewRow { margin-top:10px; display:flex; gap:10px; align-items:flex-start; }
-.framePreview { width: 160px; height: auto; border-radius: 12px; border:1px solid var(--border); background:#fff; display:none; cursor: zoom-in; }
+.framePreview { width: 160px; height: auto; border-radius: 12px; border:0px solid var(--border); background:#fff; display:none; cursor: zoom-in; }
 
 .frameHistoryList { display:flex; flex-direction:column; gap:10px; margin-top: 10px; }
-.frameItem { display:flex; gap:10px; border:1px solid var(--border); border-radius:14px; padding:10px; background:#fff; }
-.frameThumb { width: 120px; height: auto; border-radius:12px; border:1px solid var(--border); background:#fff; }
+.frameItem { display:flex; gap:10px; border:0px solid var(--border); border-radius:14px; padding:10px; background:#fff; }
+.frameThumb { width: 120px; height: auto; border-radius:12px; border:0px solid var(--border); background:#fff; }
 .frameInfo { flex:1; min-width: 0; }
 .frameBtns { display:flex; gap:10px; flex-wrap:wrap; margin-top: 8px; }
 
@@ -130,7 +130,7 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 }
 
 .videoShelf { display:flex; gap:10px; overflow-x:auto; padding: 6px 2px 2px 2px; scroll-snap-type: x mandatory; }
-.videoCard { min-width: 220px; max-width: 220px; border:1px solid var(--border); border-radius:14px; background:#fff; padding:8px; scroll-snap-align: start; cursor:pointer; user-select:none; }
+.videoCard { min-width: 220px; max-width: 220px; border:0px solid var(--border); border-radius:14px; background:#fff; padding:8px; scroll-snap-align: start; cursor:pointer; user-select:none; }
 .videoCard:hover { background:#fafafa; }
 .videoCard.selected { outline: 3px solid #111; outline-offset: 0; }
 .videoCard.dragging { opacity: 0.55; }
@@ -158,8 +158,8 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 .imgOverlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:18px; background: rgba(0,0,0,0.6); z-index: 30; }
 .imgOverlay.open { display:flex; }
 
-/*.imgOverlayPanel { width:min(1100px, 96vw); max-height: 92vh; background:#fff; border:1px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }*/
-.imgOverlayPanel { width:min(1100px, 96vw); height: 92vh; max-height: 92vh; background:#fff; border:1px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }
+/*.imgOverlayPanel { width:min(1100px, 96vw); max-height: 92vh; background:#fff; border:0px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }*/
+.imgOverlayPanel { width:min(1100px, 96vw); height: 92vh; max-height: 92vh; background:#fff; border:0px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }
 
 .imgOverlayTop { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 12px; border-bottom:1px solid var(--border); }
 .imgOverlayTopRight { display:flex; align-items:center; gap:10px; }
@@ -190,11 +190,11 @@ body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI,
 
 .modelOverlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:18px; background: rgba(0,0,0,0.6); z-index: 31; }
 .modelOverlay.open { display:flex; }
-.modelOverlayPanel { width:min(1200px, 96vw); max-height: 92vh; background:#fff; border:1px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }
+.modelOverlayPanel { width:min(1200px, 96vw); max-height: 92vh; background:#fff; border:0px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }
 .modelOverlayTop { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 12px; border-bottom:1px solid var(--border); }
 .modelOverlayStage { position:relative; flex: 1; display:flex; align-items:stretch; justify-content:stretch; background: rgba(0,0,0,0.05); }
 .modelCanvas { width:100%; height:100%; display:block; }
-.modelOverlayMeta { position:absolute; left:10px; bottom:10px; padding:6px 8px; border-radius:10px; background: rgba(255,255,255,0.85); border:1px solid var(--border); max-width: min(92%, 900px); overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modelOverlayMeta { position:absolute; left:10px; bottom:10px; padding:6px 8px; border-radius:10px; background: rgba(255,255,255,0.85); border:0px solid var(--border); max-width: min(92%, 900px); overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
 body.theme--dark .modelOverlayPanel { background:#0f0f10; }
 body.theme--dark .modelOverlayMeta { background: rgba(20,20,22,0.85); }
 
@@ -245,23 +245,23 @@ body.theme--dark .topbar,
 body.theme--custom .topbar { background: var(--card); border-bottom:1px solid var(--border); }
 
 body.theme--dark .panel,
-body.theme--custom .panel { background: var(--card); border:1px solid var(--border); }
+body.theme--custom .panel { background: var(--card); border:0px solid var(--border); }
 
 body.theme--dark .details,
-body.theme--custom .details { background: var(--card); border:1px solid var(--border); }
+body.theme--custom .details { background: var(--card); border:0px solid var(--border); }
 
 body.theme--dark .btn.ghost,
-body.theme--custom .btn.ghost { background: var(--card); border:1px solid var(--border); color: inherit; }
+body.theme--custom .btn.ghost { background: var(--card); border:0px solid var(--border); color: inherit; }
 
 body.theme--dark .input,
 body.theme--dark .select,
 body.theme--dark .textarea,
 body.theme--custom .input,
 body.theme--custom .select,
-body.theme--custom .textarea { background: var(--card); border:1px solid var(--border); color: inherit; }
+body.theme--custom .textarea { background: var(--card); border:0px solid var(--border); color: inherit; }
 
 body.theme--dark .videoCard,
-body.theme--custom .videoCard { background: var(--card); border:1px solid var(--border); }
+body.theme--custom .videoCard { background: var(--card); border:0px solid var(--border); }
 
 body.theme--dark .videoCard:hover,
 body.theme--custom .videoCard:hover { background: var(--card); }

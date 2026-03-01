@@ -528,6 +528,32 @@ function downloadBlobAsFile(blob, filename) {
   }, 500);
 }
 
+
+/* Downloads the currently captured/active frame image as a PNG file. */
+function downloadCapturedFrame(state) {
+  if (!state || !state.capturedFrame) return;
+
+  const f = state.capturedFrame || {};
+  const blob = f.blob || null;
+  if (!blob) return;
+
+  const w = Number.isFinite(f.width) ? f.width : 0;
+  const h = Number.isFinite(f.height) ? f.height : 0;
+  const t = (typeof f.time === "number" && Number.isFinite(f.time)) ? f.time.toFixed(3) : null;
+
+  const base = "frame";
+  const job = state.activeJobId ? String(state.activeJobId) : "";
+  const parts = [];
+  if (job) parts.push(job);
+  if (t) parts.push(`t${t}`);
+  if (w && h) parts.push(`${w}x${h}`);
+
+  const name = parts.length ? `${base}_${parts.join("_")}.png` : `${base}.png`;
+  downloadBlobAsFile(blob, name);
+}
+
+
+
 function renderFrameHistory(state) {
   const list = document.getElementById("frameHistoryList");
   const meta = document.getElementById("frameHistoryMeta");
@@ -2226,6 +2252,8 @@ async function tripoImageTo3D(state, statusEl, hintEl) {
 
 
 
+
+
 /* Boots the single Generate view, wires UI events, and runs generation/polling + cooldown. */
 function boot() {
   if (!location.pathname.startsWith("/app")) history.replaceState(null, "", "/app");
@@ -2283,7 +2311,6 @@ function boot() {
 
   const framePreviewEl = document.getElementById("framePreview");
   const imgOverlayEl = document.getElementById("imgOverlay");
-  const imgOverlayImgEl = document.getElementById("imgOverlayImg");
   const imgOverlayCloseEl = document.getElementById("imgOverlayClose");
 
   const modelOverlayEl = document.getElementById("modelOverlay");
@@ -2298,6 +2325,9 @@ function boot() {
   const tripoOrientationEl = document.getElementById("tripo_orientation");
   const tripoAutoSizeEl = document.getElementById("tripo_auto_size");
   const tripoCompressEl = document.getElementById("tripo_compress");
+
+  const videoFileEl = document.getElementById("videoFile");
+  const btnAddVideo = document.getElementById("btnAddVideo");
 
   const SHELF_MODE_KEY = "aigen_shelf_mode_v1";
   const THEME_KEY = "aigen_theme_v1";
@@ -2453,6 +2483,80 @@ function boot() {
       if (tripoCompressEl) tripoCompressEl.checked = !!defaults.compress;
     } catch {}
   })();
+
+  if (btnAddVideo && videoFileEl) {
+    btnAddVideo.onclick = async () => {
+      const f = videoFileEl.files && videoFileEl.files[0] ? videoFileEl.files[0] : null;
+      if (!f) {
+        if (hintEl) hintEl.textContent = "Pick a video file first.";
+        return;
+      }
+
+      if (statusEl) statusEl.textContent = "UPLOAD VIDEO\nSending…";
+      if (hintEl) hintEl.textContent = "Uploading video…";
+
+      const form = new FormData();
+      form.append("video", f, f.name || "video.mp4");
+
+      let r, data;
+      try {
+        r = await fetch("/api/upload/video", { method: "POST", body: form });
+        data = await r.json();
+      } catch {
+        if (statusEl) statusEl.textContent = "UPLOAD VIDEO\nFailed (network/error).";
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      if (!r.ok) {
+        if (statusEl) statusEl.textContent = `UPLOAD VIDEO\nError: ${(data && data.error) ? data.error : "unknown"}\nreq_id: ${(data && data.req_id) ? data.req_id : ""}`.trim();
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      const url = data && data.url ? String(data.url) : "";
+      const outId = data && data.output_id ? String(data.output_id) : "";
+      const fname = data && data.filename ? String(data.filename) : (f.name || "video");
+
+      if (!url) {
+        if (statusEl) statusEl.textContent = "UPLOAD VIDEO\nFailed (no url returned).";
+        if (hintEl) hintEl.textContent = "";
+        return;
+      }
+
+      const requestId = outId || (`upload_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+
+      upsertJob({
+        request_id: requestId,
+        prompt: `UPLOAD • ${fname}`,
+        created_at: new Date().toISOString(),
+        status: "done",
+        url,
+        frames: [],
+      });
+
+      const order = loadVideoOrder();
+      if (!order.includes(requestId)) {
+        order.unshift(requestId);
+        saveVideoOrder(order);
+      }
+
+      state.activeJobId = requestId;
+      state.selectedVideoIds = [requestId];
+
+      renderJobsList(selectJob);
+      renderVideoShelf(state);
+      renderFrameHistory(state);
+
+      resetPlayer();
+      showPlayer(url);
+
+      if (statusEl) statusEl.textContent = `UPLOAD VIDEO\nDONE\nrequest_id: ${requestId}\nurl: ${url}`.trim();
+      if (hintEl) hintEl.textContent = "";
+
+      try { videoFileEl.value = ""; } catch {}
+    };
+  }
 
   if (imageEl) {
     imageEl.addEventListener("change", () => {
@@ -2707,7 +2811,6 @@ function boot() {
     renderVideoShelf(state);
   });
 }
-
 
 
 

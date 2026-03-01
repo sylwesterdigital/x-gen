@@ -173,9 +173,12 @@
           <div class="panel compact">
             <div class="panelHead">
               <div class="label">Status</div>
+
               <div class="panelHeadRight">
                 <button id="btn-clear-status" class="btn tiny ghost">Clear</button>
               </div>
+
+              
             </div>
             <pre id="status" class="pre fixedPre">Idle.</pre>
             <div id="result" class="result"></div>
@@ -189,6 +192,8 @@
           <div class="label">Videos</div>
           
           <div class="panelHeadRight shelfControls">
+            <input id="videoFile" class="input" type="file" accept="video/*" />
+            <button id="btnAddVideo" class="btn tiny ghost" type="button">Add video</button>
             <button id="btnShelfMode" class="btn tiny ghost" type="button" title="Change shelf size">Shelf: M</button>
             <button id="btn-join" class="btn tiny ghost">Join selected</button>
           </div>

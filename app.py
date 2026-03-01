@@ -287,6 +287,43 @@ def api_video_proxy():
 def api_output(name: str):
     return send_from_directory(OUTPUT_DIR, name, as_attachment=False)
 
+
+
+@app.post("/api/upload/video")
+def api_upload_video():
+    req_id = request.req_id
+
+    f = request.files.get("video")
+    if not f or not f.filename:
+        return jsonify(error="Missing video", req_id=req_id), 400
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(base_dir, "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+
+    ext = os.path.splitext(f.filename)[1].lower()
+    if not ext:
+        ext = ".mp4"
+
+    safe_ext = ext if ext in (".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi") else ".mp4"
+    out_name = _output_name("upload", safe_ext.lstrip("."))
+    out_path = os.path.join(out_dir, out_name)
+
+    try:
+        f.save(out_path)
+    except Exception as e:
+        log.error("Upload video save failed req_id=%s err=%s", req_id, str(e), exc_info=True)
+        return jsonify(error=f"Failed to save video: {e}", req_id=req_id), 500
+
+    return jsonify(
+        url=f"/api/output/{out_name}",
+        output_id=f"upload_{out_name}",
+        filename=f.filename,
+        req_id=req_id,
+    )
+
+
+
 # ---- API: ffmpeg concat ----
 @app.post("/api/ffmpeg/concat")
 def api_ffmpeg_concat():
@@ -413,6 +450,7 @@ def api_ffmpeg_audio():
 
 
 
+
 @app.post("/api/tripo/start")
 def api_tripo_start():
     req_id = request.req_id
@@ -426,12 +464,12 @@ def api_tripo_start():
         return jsonify(error="Missing image", req_id=req_id), 400
 
     allowed_model_versions = [
+        "Turbo-v1.0-20250506",
         "v3.1-20260211",
         "v3.0-20250812",
         "v2.5-20250123",
         "v2.0-20240919",
         "v1.4-20240625",
-        "Turbo-v1.0-20250506",
         "",
     ]
     allowed_texture_quality = ["standard", "detailed"]
@@ -469,35 +507,110 @@ def api_tripo_start():
     if orientation not in allowed_orientation:
         return jsonify(error=f"Invalid orientation: {orientation}", req_id=req_id), 400
 
-    import asyncio
-    from tripo3d import TripoClient
+    ext = os.path.splitext(image.filename)[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        ext = ".png"
 
-    suffix = os.path.splitext(image.filename)[1].lower() or ".png"
+    file_type = "png"
+    if ext in (".jpg", ".jpeg"):
+        file_type = "jpg"
+    elif ext == ".webp":
+        file_type = "webp"
 
-    with tempfile.TemporaryDirectory() as td:
-        img_path = os.path.join(td, f"input{suffix}")
-        image.save(img_path)
+    try:
+        img_bytes = image.read()
+        if not img_bytes:
+            return jsonify(error="Empty image", req_id=req_id), 400
+    except Exception as e:
+        log.error("Tripo read image failed req_id=%s err=%s", req_id, str(e))
+        return jsonify(error=f"Failed to read image: {e}", req_id=req_id), 400
 
-        async def _run():
-            async with TripoClient(api_key=api_key) as c:
-                kwargs = dict(
-                    image=img_path,
-                    texture_quality=texture_quality,
-                    orientation=orientation,
-                    auto_size=auto_size,
-                    compress=compress,
-                )
-                if model_version:
-                    kwargs["model_version"] = model_version
-                task_id = await c.image_to_model(**kwargs)
-                return task_id
+    headers_auth = {"Authorization": f"Bearer {api_key}"}
 
-        try:
-            task_id = asyncio.run(_run())
-        except Exception as e:
-            return jsonify(error=f"Tripo start failed: {e}", req_id=req_id), 500
+    upload_url = "https://api.tripo3d.ai/v2/openapi/upload/sts"
+    task_url = "https://api.tripo3d.ai/v2/openapi/task"
+
+    # Upload (STS). Some accounts return data.image_token (file_token) instead of data.object.
+    try:
+        up = requests.post(
+            upload_url,
+            headers=headers_auth,
+            files={"file": (f"input{ext}", img_bytes, image.mimetype or "application/octet-stream")},
+            timeout=120,
+        )
+        up_text = (up.text or "").strip()
+        up_data = up.json() if up.content else {}
+    except Exception as e:
+        log.error("Tripo upload exception req_id=%s err=%s", req_id, str(e), exc_info=True)
+        return jsonify(error=f"Tripo upload failed: {e}", req_id=req_id), 500
+
+    log.info("Tripo upload req_id=%s status=%s body=%s", req_id, up.status_code, up_text[:2000])
+
+    if up.status_code >= 400:
+        return jsonify(error=up_data or up_text or f"HTTP {up.status_code}", req_id=req_id), up.status_code
+
+    up_code = up_data.get("code", 0)
+    if up_code not in (0, "0", None):
+        msg = up_data.get("message") or up_data.get("msg") or up_data
+        return jsonify(error=msg, req_id=req_id), 400
+
+    up_payload = up_data.get("data") or {}
+    image_token = up_payload.get("image_token") or up_payload.get("file_token") or ""
+
+    file_obj = up_payload.get("object") if isinstance(up_payload.get("object"), dict) else None
+
+    file_block = None
+    if image_token:
+        file_block = {"type": file_type, "file_token": str(image_token)}
+    elif file_obj and file_obj.get("bucket") and file_obj.get("key"):
+        file_block = {"type": file_type, "object": {"bucket": file_obj["bucket"], "key": file_obj["key"]}}
+    else:
+        return jsonify(error=f"Tripo upload returned unexpected payload: {up_data}", req_id=req_id), 500
+
+    task_payload = {
+        "type": "image_to_model",
+        "file": file_block,
+        "texture_quality": texture_quality,
+        "orientation": orientation,
+        "auto_size": bool(auto_size),
+    }
+    if model_version:
+        task_payload["model_version"] = model_version
+    if compress:
+        task_payload["compress"] = "geometry"
+
+    try:
+        resp = requests.post(
+            task_url,
+            headers={**headers_auth, "Content-Type": "application/json"},
+            json=task_payload,
+            timeout=120,
+        )
+        resp_text = (resp.text or "").strip()
+        data = resp.json() if resp.content else {}
+    except Exception as e:
+        log.error("Tripo task exception req_id=%s err=%s", req_id, str(e), exc_info=True)
+        return jsonify(error=f"Tripo start failed: {e}", req_id=req_id), 500
+
+    log.info("Tripo task req_id=%s status=%s body=%s", req_id, resp.status_code, resp_text[:2000])
+
+    if resp.status_code >= 400:
+        return jsonify(error=data or resp_text or f"HTTP {resp.status_code}", req_id=req_id), resp.status_code
+
+    code = data.get("code", 0)
+    if code not in (0, "0", None):
+        msg = data.get("message") or data.get("msg") or data
+        return jsonify(error=msg, req_id=req_id), 400
+
+    task_id = (data.get("data") or {}).get("task_id") or data.get("task_id")
+    if not task_id:
+        return jsonify(error=f"Tripo start failed: missing task_id ({data})", req_id=req_id), 500
 
     return jsonify(task_id=task_id, req_id=req_id)
+
+
+
+
 
 
 @app.get("/api/tripo/options")
@@ -544,6 +657,8 @@ def api_tripo_options():
     )  
 
 
+
+
 @app.get("/api/tripo/status/<task_id>")
 def api_tripo_status(task_id: str):
     req_id = request.req_id
@@ -552,40 +667,67 @@ def api_tripo_status(task_id: str):
     if not api_key:
         return jsonify(error="Missing TRIPO_API_KEY environment variable.", req_id=req_id), 500
 
-    import asyncio
-    from tripo3d import TripoClient
-
-    async def _run():
-        async with TripoClient(api_key=api_key) as c:
-            task = await c.get_task(task_id)
-            return task
+    url = f"https://api.tripo3d.ai/v2/openapi/task/{task_id}"
 
     try:
-        task = asyncio.run(_run())
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=60,
+        )
+        resp_text = (resp.text or "").strip()
+        data = resp.json() if resp.content else {}
     except Exception as e:
+        log.error("Tripo status exception req_id=%s task_id=%s err=%s", req_id, task_id, str(e), exc_info=True)
         return jsonify(error=f"Tripo status failed: {e}", req_id=req_id), 500
 
-    status = getattr(task, "status", None) or "unknown"
-    progress = getattr(task, "progress", None)
+    log.info("Tripo status req_id=%s task_id=%s status=%s body=%s", req_id, task_id, resp.status_code, resp_text[:2000])
 
-    out = getattr(task, "output", None)
-    out_model = getattr(out, "model", None) if out else None
-    out_base = getattr(out, "base_model", None) if out else None
-    out_pbr = getattr(out, "pbr_model", None) if out else None
-    out_render = getattr(out, "rendered_image", None) if out else None
+    if resp.status_code >= 400:
+        return jsonify(error=data or resp_text or f"HTTP {resp.status_code}", req_id=req_id), resp.status_code
+
+    code = data.get("code", 0)
+    if code not in (0, "0", None):
+        msg = data.get("message") or data.get("msg") or data
+        return jsonify(error=msg, req_id=req_id), 400
+
+    task = data.get("data") or {}
+    status = task.get("status") or "unknown"
+    progress = task.get("progress", None)
+
+    out = task.get("output") or {}
+
+    err = task.get("error") or task.get("err") or task.get("message") or task.get("msg") or None
+    if not err and isinstance(task.get("result"), dict):
+        err = task["result"].get("error") or task["result"].get("message") or None
 
     return jsonify(
         status=status,
         progress=progress,
         output={
-            "model": out_model,
-            "base_model": out_base,
-            "pbr_model": out_pbr,
-            "rendered_image": out_render,
+            "model": out.get("model"),
+            "base_model": out.get("base_model"),
+            "pbr_model": out.get("pbr_model"),
+            "rendered_image": out.get("rendered_image"),
         },
+        error=err,
         req_id=req_id,
     )
 
+
+
+@app.get("/api/tripo/input/<name>")
+def api_tripo_input(name: str):
+    req_id = request.req_id
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    input_dir = os.path.join(base_dir, "outputs", "tripo_inputs")
+    os.makedirs(input_dir, exist_ok=True)
+
+    try:
+        return send_from_directory(input_dir, name, as_attachment=False)
+    except Exception as e:
+        return jsonify(error=f"Tripo input not found: {e}", req_id=req_id), 404
 
 
 
