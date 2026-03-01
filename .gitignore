@@ -213,3 +213,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+client_secret_864598374760-8r139n0soqe4il6j8n8p6v3ce69f4tle.apps.googleusercontent.com.json
+
+# secrets
+yt_token.json
+client_secret*.json
